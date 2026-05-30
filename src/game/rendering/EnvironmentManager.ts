@@ -347,47 +347,20 @@ export class EnvironmentManager {
       importedRoot.computeWorldMatrix(true);
       result.meshes.forEach(m => m.computeWorldMatrix(true));
 
-      const children = importedRoot.getChildren(undefined, false);
       const tempItems: LibraryItem[] = [];
+      const leafMeshes = importedRoot.getChildMeshes(false);
 
-      children.forEach((child, idx) => {
-        if (child instanceof TransformNode) {
-          // Verify if node has any physical rendering sub-meshes
-          const subMeshes = child.getChildMeshes(false);
-          let hasGeometry = false;
-          for (const m of subMeshes) {
-            if (m.getTotalVertices() > 0) {
-              hasGeometry = true;
-              break;
-            }
-          }
-          if (hasGeometry || (child instanceof Mesh && child.getTotalVertices() > 0)) {
-            tempItems.push({
-              id: `lib_${child.name || child.id || "elem"}_node_${idx}_${Date.now()}`,
-              name: child.name,
-              originalNode: child
-            });
-          }
+      leafMeshes.forEach((mesh, idx) => {
+        if (mesh.getTotalVertices() > 0) {
+          tempItems.push({
+            id: `lib_${mesh.name || mesh.id}_${idx}_${Date.now()}`,
+            name: mesh.name,
+            originalNode: mesh
+          });
         }
       });
 
-      // Fallback if no clean sub-nodes were discovered (flat model files)
-      if (tempItems.length <= 1) {
-        tempItems.length = 0;
-        
-        // Gather standard top level meshes directly
-        result.meshes.forEach((mesh, idx) => {
-          if (mesh !== importedRoot && mesh.parent === importedRoot && mesh.getTotalVertices() > 0) {
-            tempItems.push({
-              id: `lib_${mesh.name || mesh.id || "mesh"}_fb_${idx}_${Date.now()}`,
-              name: mesh.name,
-              originalNode: mesh
-            });
-          }
-        });
-      }
-
-      // Final fallback: treat the whole imported node as a single element
+      // Final fallback: treat the whole imported node as a single element if nothing matches
       if (tempItems.length === 0) {
         tempItems.push({
           id: `lib_root_${Date.now()}`,
@@ -401,59 +374,78 @@ export class EnvironmentManager {
       // Detect if it is the custom environment kit "enviroTest" (usually containing "enviro" in filename or exactly 8 items)
       const isEnviroTest = file.name.toLowerCase().includes("enviro") || tempItems.length === 8;
       if (isEnviroTest && tempItems.length > 1) {
-        // Find bounding box for each item under originalNode parent space
-        const itemBounds = tempItems.map(item => {
-          item.originalNode.computeWorldMatrix(true);
-          const bounds = item.originalNode.getHierarchyBoundingVectors(true);
-          const center = bounds.max.add(bounds.min).scale(0.5);
-          const size = bounds.max.subtract(bounds.min);
-          return { item, bounds, center, size };
+        // High fidelity classification based on subcomponent names
+        const floorTiles = tempItems.filter(item => {
+          const ln = item.name.toLowerCase();
+          const pn = item.originalNode.parent ? item.originalNode.parent.name.toLowerCase() : "";
+          return ln.includes("floor") || ln.includes("tile") || ln.includes("ground") ||
+                 pn.includes("floor") || pn.includes("tile") || pn.includes("ground");
         });
 
-        // The floor tiles are extremely flat compared to walls and obstacles.
-        // Let's sort items by their Y dimension (height) ascending.
-        const sortedByHeight = [...itemBounds].sort((a, b) => a.size.y - b.size.y);
+        const blocks = tempItems.filter(item => !floorTiles.includes(item));
 
-        // The first 4 flat/short items are the floor tiles.
-        const floorCands = sortedByHeight.slice(0, 4);
-        // The remaining 4 are the non-floor blocks (obstacle, low wall, mid wall, high wall).
-        const blockCands = sortedByHeight.slice(4);
-
-        // Classify floor tiles based on their local horizontal centers relative to the shared NE corner (0,0)
-        // Since (0,0) is the Northeast corner of the 2x2 grid square, the quadrants map to negative coordinates:
-        const sortedByLocalX = [...floorCands].sort((a, b) => a.center.x - b.center.x);
-        const sortedByLocalZ = [...floorCands].sort((a, b) => a.center.z - b.center.z);
-
-        floorCands.forEach(cand => {
-          const isWest = sortedByLocalX.indexOf(cand) < 2;
-          const isSouth = sortedByLocalZ.indexOf(cand) < 2;
-
-          let suffix = "NE";
-          if (!isWest && !isSouth) suffix = "NE";
-          else if (isWest && !isSouth) suffix = "NW";
-          else if (!isWest && isSouth) suffix = "SE";
-          else if (isWest && isSouth) suffix = "SW";
+        blocks.forEach(block => {
+          const ln = block.name.toLowerCase();
+          const pn = block.originalNode.parent ? block.originalNode.parent.name.toLowerCase() : "";
           
-          cand.item.name = `enviroTest_floor_${suffix}`;
+          if (ln.includes("obstacle") || pn.includes("obstacle")) {
+            block.name = "enviroTest_obstacle";
+          } else if (ln.includes("lowwall") || ln.includes("low_wall") || ln.includes("low wall") || pn.includes("lowwall") || pn.includes("low_wall") || pn.includes("low wall")) {
+            block.name = "enviroTest_low_wall";
+          } else if (ln.includes("midwall") || ln.includes("mid_wall") || ln.includes("mid wall") || pn.includes("midwall") || pn.includes("mid_wall") || pn.includes("mid wall")) {
+            block.name = "enviroTest_mid_wall";
+          } else if (ln.includes("highwall") || ln.includes("high_wall") || ln.includes("high wall") || pn.includes("highwall") || pn.includes("high_wall") || pn.includes("high wall")) {
+            block.name = "enviroTest_high_wall";
+          }
         });
 
-        // Among the 4 non-floor items: an obstacle is 1x1x1 (height 1), low wall is 1x1x2 (height 2),
-        // mid wall is 1x1x3 (height 3), and tall/high wall is 1x1x4 (height 4).
-        // Sorting by height ascending perfectly identifies them.
-        const sortedBlocksByHeight = [...blockCands].sort((a, b) => a.size.y - b.size.y);
-        
-        sortedBlocksByHeight[0].item.name = "enviroTest_obstacle";
-        sortedBlocksByHeight[1].item.name = "enviroTest_low_wall";
-        sortedBlocksByHeight[2].item.name = "enviroTest_mid_wall";
-        sortedBlocksByHeight[3].item.name = "enviroTest_high_wall";
+        // Use height-sorting fallback for any unclassified blocks
+        const unclassifiedBlocks = blocks.filter(b => !b.name.startsWith("enviroTest_"));
+        if (unclassifiedBlocks.length > 0) {
+          const sorted = [...unclassifiedBlocks].sort((a, b) => {
+            a.originalNode.computeWorldMatrix(true);
+            b.originalNode.computeWorldMatrix(true);
+            const sizeA = a.originalNode.getHierarchyBoundingVectors(true).max.subtract(a.originalNode.getHierarchyBoundingVectors(true).min);
+            const sizeB = b.originalNode.getHierarchyBoundingVectors(true).max.subtract(b.originalNode.getHierarchyBoundingVectors(true).min);
+            return sizeA.y - sizeB.y;
+          });
+          if (sorted[0]) sorted[0].name = "enviroTest_obstacle";
+          if (sorted[1]) sorted[1].name = "enviroTest_low_wall";
+          if (sorted[2]) sorted[2].name = "enviroTest_mid_wall";
+          if (sorted[3]) sorted[3].name = "enviroTest_high_wall";
+        }
 
-        // Calibration: Let's measure the floor tile side width to compute a uniform kit scale factor.
-        const refFloor = floorCands[0];
-        const floorWidth = Math.max(refFloor.size.x, refFloor.size.z);
-        // Scale so each floor tile is 4.0 units in Babylon coordinate system space
-        this.kitScaleFactor = floorWidth > 0.01 ? 4.0 / floorWidth : 1.0;
-        
-        console.log(`[EnviroTest Classification]: Calibrated and cataloged 8 assets. Kit scale factor set to ${this.kitScaleFactor}`);
+        if (floorTiles.length === 4) {
+          const itemBounds = floorTiles.map(item => {
+            item.originalNode.computeWorldMatrix(true);
+            const bounds = item.originalNode.getHierarchyBoundingVectors(true);
+            const center = bounds.max.add(bounds.min).scale(0.5);
+            const size = bounds.max.subtract(bounds.min);
+            return { item, center, size };
+          });
+
+          const sortedByLocalX = [...itemBounds].sort((a, b) => a.center.x - b.center.x);
+          const sortedByLocalZ = [...itemBounds].sort((a, b) => a.center.z - b.center.z);
+
+          floorTiles.forEach(item => {
+            const cand = itemBounds.find(ib => ib.item === item)!;
+            const isWest = sortedByLocalX.indexOf(cand) < 2;
+            const isSouth = sortedByLocalZ.indexOf(cand) < 2;
+
+            let suffix = "NE";
+            if (!isWest && !isSouth) suffix = "NE";
+            else if (isWest && !isSouth) suffix = "NW";
+            else if (!isWest && isSouth) suffix = "SE";
+            else if (isWest && isSouth) suffix = "SW";
+            
+            item.name = `enviroTest_floor_${suffix}`;
+          });
+
+          const refFloor = itemBounds[0];
+          const floorWidth = Math.max(refFloor.size.x, refFloor.size.z);
+          this.kitScaleFactor = floorWidth > 0.01 ? 4.0 / floorWidth : 1.0;
+          console.log(`[EnviroTest Classification]: Calibrated floorWidth=${floorWidth}, kitScaleFactor set to ${this.kitScaleFactor}`);
+        }
       }
 
       // Deactivate main library root node so it functions purely as an unrendered asset catalog pool
@@ -554,41 +546,18 @@ export class EnvironmentManager {
       importedRoot.computeWorldMatrix(true);
       result.meshes.forEach(m => m.computeWorldMatrix(true));
 
-      const children = importedRoot.getChildren(undefined, false);
       const tempItems: LibraryItem[] = [];
+      const leafMeshes = importedRoot.getChildMeshes(false);
 
-      children.forEach((child, idx) => {
-        if (child instanceof TransformNode) {
-          const subMeshes = child.getChildMeshes(false);
-          let hasGeometry = false;
-          for (const m of subMeshes) {
-            if (m.getTotalVertices() > 0) {
-              hasGeometry = true;
-              break;
-            }
-          }
-          if (hasGeometry || (child instanceof Mesh && child.getTotalVertices() > 0)) {
-            tempItems.push({
-              id: `lib_${child.name || child.id || "elem"}_node_${idx}_${Date.now()}`,
-              name: child.name,
-              originalNode: child
-            });
-          }
+      leafMeshes.forEach((mesh, idx) => {
+        if (mesh.getTotalVertices() > 0) {
+          tempItems.push({
+            id: `lib_${mesh.name || mesh.id}_${idx}_${Date.now()}`,
+            name: mesh.name,
+            originalNode: mesh
+          });
         }
       });
-
-      if (tempItems.length <= 1) {
-        tempItems.length = 0;
-        result.meshes.forEach((mesh, idx) => {
-          if (mesh !== importedRoot && mesh.parent === importedRoot && mesh.getTotalVertices() > 0) {
-            tempItems.push({
-              id: `lib_${mesh.name || mesh.id || "mesh"}_fb_${idx}_${Date.now()}`,
-              name: mesh.name,
-              originalNode: mesh
-            });
-          }
-        });
-      }
 
       if (tempItems.length === 0) {
         tempItems.push({
@@ -602,44 +571,77 @@ export class EnvironmentManager {
 
       // Classify
       if (tempItems.length > 1) {
-        const itemBounds = tempItems.map(item => {
-          item.originalNode.computeWorldMatrix(true);
-          const bounds = item.originalNode.getHierarchyBoundingVectors(true);
-          const center = bounds.max.add(bounds.min).scale(0.5);
-          const size = bounds.max.subtract(bounds.min);
-          return { item, bounds, center, size };
+        const floorTiles = tempItems.filter(item => {
+          const ln = item.name.toLowerCase();
+          const pn = item.originalNode.parent ? item.originalNode.parent.name.toLowerCase() : "";
+          return ln.includes("floor") || ln.includes("tile") || ln.includes("ground") ||
+                 pn.includes("floor") || pn.includes("tile") || pn.includes("ground");
         });
 
-        const sortedByHeight = [...itemBounds].sort((a, b) => a.size.y - b.size.y);
-        const floorCands = sortedByHeight.slice(0, 4);
-        const blockCands = sortedByHeight.slice(4);
+        const blocks = tempItems.filter(item => !floorTiles.includes(item));
 
-        const sortedByLocalX = [...floorCands].sort((a, b) => a.center.x - b.center.x);
-        const sortedByLocalZ = [...floorCands].sort((a, b) => a.center.z - b.center.z);
-
-        floorCands.forEach(cand => {
-          const isWest = sortedByLocalX.indexOf(cand) < 2;
-          const isSouth = sortedByLocalZ.indexOf(cand) < 2;
-
-          let suffix = "NE";
-          if (!isWest && !isSouth) suffix = "NE";
-          else if (isWest && !isSouth) suffix = "NW";
-          else if (!isWest && isSouth) suffix = "SE";
-          else if (isWest && isSouth) suffix = "SW";
+        blocks.forEach(block => {
+          const ln = block.name.toLowerCase();
+          const pn = block.originalNode.parent ? block.originalNode.parent.name.toLowerCase() : "";
           
-          cand.item.name = `enviroTest_floor_${suffix}`;
+          if (ln.includes("obstacle") || pn.includes("obstacle")) {
+            block.name = "enviroTest_obstacle";
+          } else if (ln.includes("lowwall") || ln.includes("low_wall") || ln.includes("low wall") || pn.includes("lowwall") || pn.includes("low_wall") || pn.includes("low wall")) {
+            block.name = "enviroTest_low_wall";
+          } else if (ln.includes("midwall") || ln.includes("mid_wall") || ln.includes("mid wall") || pn.includes("midwall") || pn.includes("mid_wall") || pn.includes("mid wall")) {
+            block.name = "enviroTest_mid_wall";
+          } else if (ln.includes("highwall") || ln.includes("high_wall") || ln.includes("high wall") || pn.includes("highwall") || pn.includes("high_wall") || pn.includes("high wall")) {
+            block.name = "enviroTest_high_wall";
+          }
         });
 
-        const sortedBlocksByHeight = [...blockCands].sort((a, b) => a.size.y - b.size.y);
-        sortedBlocksByHeight[0].item.name = "enviroTest_obstacle";
-        sortedBlocksByHeight[1].item.name = "enviroTest_low_wall";
-        sortedBlocksByHeight[2].item.name = "enviroTest_mid_wall";
-        sortedBlocksByHeight[3].item.name = "enviroTest_high_wall";
+        // Use height-sorting fallback for any unclassified blocks
+        const unclassifiedBlocks = blocks.filter(b => !b.name.startsWith("enviroTest_"));
+        if (unclassifiedBlocks.length > 0) {
+          const sorted = [...unclassifiedBlocks].sort((a, b) => {
+            a.originalNode.computeWorldMatrix(true);
+            b.originalNode.computeWorldMatrix(true);
+            const sizeA = a.originalNode.getHierarchyBoundingVectors(true).max.subtract(a.originalNode.getHierarchyBoundingVectors(true).min);
+            const sizeB = b.originalNode.getHierarchyBoundingVectors(true).max.subtract(b.originalNode.getHierarchyBoundingVectors(true).min);
+            return sizeA.y - sizeB.y;
+          });
+          if (sorted[0]) sorted[0].name = "enviroTest_obstacle";
+          if (sorted[1]) sorted[1].name = "enviroTest_low_wall";
+          if (sorted[2]) sorted[2].name = "enviroTest_mid_wall";
+          if (sorted[3]) sorted[3].name = "enviroTest_high_wall";
+        }
 
-        const refFloor = floorCands[0];
-        const floorWidth = Math.max(refFloor.size.x, refFloor.size.z);
-        this.kitScaleFactor = floorWidth > 0.01 ? 4.0 / floorWidth : 1.0;
-        console.log(`[Preload Classification]: Calibrated and cataloged 8 assets. Kit scale factor is ${this.kitScaleFactor}`);
+        if (floorTiles.length === 4) {
+          const itemBounds = floorTiles.map(item => {
+            item.originalNode.computeWorldMatrix(true);
+            const bounds = item.originalNode.getHierarchyBoundingVectors(true);
+            const center = bounds.max.add(bounds.min).scale(0.5);
+            const size = bounds.max.subtract(bounds.min);
+            return { item, center, size };
+          });
+
+          const sortedByLocalX = [...itemBounds].sort((a, b) => a.center.x - b.center.x);
+          const sortedByLocalZ = [...itemBounds].sort((a, b) => a.center.z - b.center.z);
+
+          floorTiles.forEach(item => {
+            const cand = itemBounds.find(ib => ib.item === item)!;
+            const isWest = sortedByLocalX.indexOf(cand) < 2;
+            const isSouth = sortedByLocalZ.indexOf(cand) < 2;
+
+            let suffix = "NE";
+            if (!isWest && !isSouth) suffix = "NE";
+            else if (isWest && !isSouth) suffix = "NW";
+            else if (!isWest && isSouth) suffix = "SE";
+            else if (isWest && isSouth) suffix = "SW";
+            
+            item.name = `enviroTest_floor_${suffix}`;
+          });
+
+          const refFloor = itemBounds[0];
+          const floorWidth = Math.max(refFloor.size.x, refFloor.size.z);
+          this.kitScaleFactor = floorWidth > 0.01 ? 4.0 / floorWidth : 1.0;
+          console.log(`[Preload Classification]: Calibrated floorWidth=${floorWidth}, Kit scale factor is ${this.kitScaleFactor}`);
+        }
       }
 
       // Deactivate main library root node so it functions purely as an unrendered asset catalog pool

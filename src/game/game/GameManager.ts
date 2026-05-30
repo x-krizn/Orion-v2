@@ -414,37 +414,33 @@ export class GameManager {
     // 1. Try preloading the player character model
     const warriorPath = "./assets/models/mechs/warriorTest.glb";
     try {
-      const response = await fetch(warriorPath, { method: "HEAD" });
-      if (response.ok) {
-        console.log("[Preloader]: Discovered user custom mech warriorTest.glb, importing...");
-        const results = await SceneLoader.ImportMeshAsync("", "", warriorPath, this.scene, undefined, ".glb");
-        const modelRoot = results.meshes[0];
-        
-        this.player.attachCustomModel(modelRoot);
-        
-        const list: ModelAssetInfo = {
-          id: "preloaded_warrior",
-          name: "warriorTest.glb",
-          type: "character",
-          source: "file",
-          meshCount: results.meshes.length,
-        };
-        this.onAssetListChanged([list]);
-      }
+      console.log("[Preloader]: Attempting to load user custom mech warriorTest.glb...");
+      const results = await SceneLoader.ImportMeshAsync("", "", warriorPath, this.scene, undefined, ".glb");
+      const modelRoot = results.meshes[0];
+      
+      this.player.attachCustomModel(modelRoot);
+      
+      const list: ModelAssetInfo = {
+        id: "preloaded_warrior",
+        name: "warriorTest.glb",
+        type: "character",
+        source: "file",
+        meshCount: results.meshes.length,
+      };
+      this.onAssetListChanged([list]);
+      console.log("[Preloader]: Successfully preloaded custom mech warriorTest.glb!");
     } catch (e) {
-      console.log("[Preloader]: Default warrior model is not present, using procedural model.");
+      console.log("[Preloader]: Custom warriorTest.glb is not present on workspace or could not load, using procedural model.", e);
     }
 
     // 2. Try preloading the arena environment model
     const enviroPath = "./assets/tiles/enviroTest.glb";
     try {
-      const response = await fetch(enviroPath, { method: "HEAD" });
-      if (response.ok) {
-        console.log("[Preloader]: Discovered user custom environment enviroTest.glb, importing...");
-        await this.environment.preloadEnviroModelFromURL(enviroPath);
-      }
+      console.log("[Preloader]: Attempting to load user custom environment enviroTest.glb...");
+      await this.environment.preloadEnviroModelFromURL(enviroPath);
+      console.log("[Preloader]: Successfully preloaded custom environment enviroTest.glb!");
     } catch (e) {
-      console.log("[Preloader]: Default environment kit is not present, using default grid layout.");
+      console.log("[Preloader]: Custom enviroTest.glb is not present on workspace or could not load, using default grid layout.", e);
     }
   }
 
