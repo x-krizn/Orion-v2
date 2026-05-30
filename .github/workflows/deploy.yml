@@ -1,0 +1,36 @@
+name: Deploy Mech Sandbox to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    concurrency: ci-${{ github.ref }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Codebase 🛎️
+        uses: actions/checkout@v4
+
+      - name: Setup Node environment 🔧
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Project Dependencies 📦
+        run: npm ci || npm install
+
+      - name: Compile and Bundle Static Site ⚡
+        run: npm run build
+
+      - name: Deploy static assets to GitHub Pages Branch 🚀
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: dist
+          branch: gh-pages
