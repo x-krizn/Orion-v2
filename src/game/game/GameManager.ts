@@ -102,6 +102,7 @@ export class GameManager {
     this.initSystems();
     this.initPostProcessing();
     this.registerDragAndDrop();
+    this.preloadDefaultAssets();
     this.startLoop();
   }
 
@@ -386,6 +387,10 @@ export class GameManager {
    * Setup Drag & Drop handlers to capture GLTF/GLB local structures directly
    */
   private registerDragAndDrop(): void {
+    const urlParams = new URL(window.location.href).searchParams;
+    const isEditMode = urlParams.get("mode") === "edit";
+    if (!isEditMode) return;
+
     const dropZone = window;
 
     dropZone.addEventListener("dragover", (e) => {
@@ -400,6 +405,47 @@ export class GameManager {
       const file = e.dataTransfer.files[0];
       await this.handleInjectedFile(file);
     });
+  }
+
+  /**
+   * Automatically preload user uploaded custom models if they exist in the workspace assets paths
+   */
+  public async preloadDefaultAssets(): Promise<void> {
+    // 1. Try preloading the player character model
+    const warriorPath = "./assets/models/mechs/warriorTest.glb";
+    try {
+      const response = await fetch(warriorPath, { method: "HEAD" });
+      if (response.ok) {
+        console.log("[Preloader]: Discovered user custom mech warriorTest.glb, importing...");
+        const results = await SceneLoader.ImportMeshAsync("", "", warriorPath, this.scene, undefined, ".glb");
+        const modelRoot = results.meshes[0];
+        
+        this.player.attachCustomModel(modelRoot);
+        
+        const list: ModelAssetInfo = {
+          id: "preloaded_warrior",
+          name: "warriorTest.glb",
+          type: "character",
+          source: "file",
+          meshCount: results.meshes.length,
+        };
+        this.onAssetListChanged([list]);
+      }
+    } catch (e) {
+      console.log("[Preloader]: Default warrior model is not present, using procedural model.");
+    }
+
+    // 2. Try preloading the arena environment model
+    const enviroPath = "./assets/tiles/enviroTest.glb";
+    try {
+      const response = await fetch(enviroPath, { method: "HEAD" });
+      if (response.ok) {
+        console.log("[Preloader]: Discovered user custom environment enviroTest.glb, importing...");
+        await this.environment.preloadEnviroModelFromURL(enviroPath);
+      }
+    } catch (e) {
+      console.log("[Preloader]: Default environment kit is not present, using default grid layout.");
+    }
   }
 
   private startLoop(): void {

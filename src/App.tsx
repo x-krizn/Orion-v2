@@ -22,6 +22,7 @@ import {
   Upload,
   ChevronLeft,
   ChevronRight,
+  Download,
 } from "lucide-react";
 import { GameManager } from "./game/game/GameManager";
 import { PerformanceStats, ModelAssetInfo } from "./game/types";
@@ -51,6 +52,44 @@ export default function App() {
   const [libraryItems, setLibraryItems] = useState<{ id: string; name: string }[]>([]);
   const [selectedLibraryItem, setSelectedLibraryItem] = useState<string | null>(null);
   const [placementMode, setPlacementMode] = useState<boolean>(false);
+
+  // App mode: whether we are playing or editing
+  const [appMode] = useState<"play" | "edit">(() => {
+    const urlParams = new URL(window.location.href).searchParams;
+    return urlParams.get("mode") === "edit" ? "edit" : "play";
+  });
+
+  // PWA installer hooks
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isInstallable, setIsInstallable] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+    };
+    window.addEventListener("beforeinstallprompt", handleBeforeInstall);
+    
+    // Check if running in standalone display mode
+    const isStandalone = window.matchMedia("(display-mode: standalone)").matches;
+    if (isStandalone) {
+      console.log("Welcome back pilot! Game client launched successfully via standalone client.");
+    }
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    console.log(`User response to install prompt: ${outcome}`);
+    setDeferredPrompt(null);
+    setIsInstallable(false);
+  };
 
   // User asset calibration multipliers
   const [customChassisScale, setCustomChassisScale] = useState<number>(1.0);
@@ -314,11 +353,23 @@ export default function App() {
                 <Activity className="w-2.5 h-2.5 animate-pulse text-orange-400" />
                 <span>Diagnostics: {showTelemetry ? "ON" : "OFF"}</span>
               </button>
+              {isInstallable && (
+                <button
+                  id="pwaInstallButton"
+                  onClick={handleInstallClick}
+                  className="pointer-events-auto px-2 py-0.5 bg-blue-500/20 hover:bg-blue-500/35 border border-blue-500 text-white hover:text-blue-200 text-[9px] rounded font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer"
+                  title="Install Mech Combat Sandbox offline client"
+                >
+                  <Download className="w-2.5 h-2.5 text-blue-400" />
+                  <span>Install Client</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
 
         {/* Drag & Drop Hint Overlay banner */}
+        {appMode === "edit" && (
         <div className="hidden md:flex pointer-events-auto items-center space-x-3 cyber-panel py-2 px-4 rounded-md border-white/10 bg-[#0f0f12]/90 backdrop-blur-md">
           <Sparkles className="w-4 h-4 text-orange-500 animate-pulse" />
           <span className="text-xs font-mono text-orange-300">
@@ -326,6 +377,7 @@ export default function App() {
             <span className="text-orange-400 font-bold">{dndMode.toUpperCase()}</span>
           </span>
         </div>
+        )}
       </header>
 
       {/* Left Bottom Panel: Mobile Touch joystick */}
@@ -459,6 +511,7 @@ export default function App() {
       )}
 
       {/* Right Core Control panel sidebar */}
+      {appMode === "edit" && (
       <div className={`absolute top-20 z-4 transition-all duration-300 ease-in-out flex items-start pointer-events-none ${
         controlsCollapsed ? "right-0 translate-x-[320px]" : "right-4 translate-x-0"
       }`}>
@@ -986,6 +1039,7 @@ export default function App() {
         )}
         </div>
       </div>
+      )}
 
       {/* Cyberpunk corner cosmetic ornaments */}
       <div className="absolute top-4 right-4 pointer-events-none text-[9px] font-mono text-slate-600 hidden lg:block z-3">

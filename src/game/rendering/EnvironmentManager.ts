@@ -541,6 +541,146 @@ export class EnvironmentManager {
   }
 
   /**
+   * Preload a custom environment kit from a standard relative URL path
+   */
+  public async preloadEnviroModelFromURL(url: string): Promise<void> {
+    try {
+      const result = await SceneLoader.ImportMeshAsync("", "", url, this.scene, undefined, ".glb");
+      
+      const importedRoot = result.meshes[0];
+      importedRoot.name = `PRELOAD_ENVIRO_${Date.now()}`;
+      importedRoot.parent = this.rootNode;
+
+      importedRoot.computeWorldMatrix(true);
+      result.meshes.forEach(m => m.computeWorldMatrix(true));
+
+      const children = importedRoot.getChildren(undefined, false);
+      const tempItems: LibraryItem[] = [];
+
+      children.forEach((child, idx) => {
+        if (child instanceof TransformNode) {
+          const subMeshes = child.getChildMeshes(false);
+          let hasGeometry = false;
+          for (const m of subMeshes) {
+            if (m.getTotalVertices() > 0) {
+              hasGeometry = true;
+              break;
+            }
+          }
+          if (hasGeometry || (child instanceof Mesh && child.getTotalVertices() > 0)) {
+            tempItems.push({
+              id: `lib_${child.name || child.id || "elem"}_node_${idx}_${Date.now()}`,
+              name: child.name,
+              originalNode: child
+            });
+          }
+        }
+      });
+
+      if (tempItems.length <= 1) {
+        tempItems.length = 0;
+        result.meshes.forEach((mesh, idx) => {
+          if (mesh !== importedRoot && mesh.parent === importedRoot && mesh.getTotalVertices() > 0) {
+            tempItems.push({
+              id: `lib_${mesh.name || mesh.id || "mesh"}_fb_${idx}_${Date.now()}`,
+              name: mesh.name,
+              originalNode: mesh
+            });
+          }
+        });
+      }
+
+      if (tempItems.length === 0) {
+        tempItems.push({
+          id: `lib_root_${Date.now()}`,
+          name: "enviroTest",
+          originalNode: importedRoot
+        });
+      }
+
+      this.libraryItems = tempItems;
+
+      // Classify
+      if (tempItems.length > 1) {
+        const itemBounds = tempItems.map(item => {
+          item.originalNode.computeWorldMatrix(true);
+          const bounds = item.originalNode.getHierarchyBoundingVectors(true);
+          const center = bounds.max.add(bounds.min).scale(0.5);
+          const size = bounds.max.subtract(bounds.min);
+          return { item, bounds, center, size };
+        });
+
+        const sortedByHeight = [...itemBounds].sort((a, b) => a.size.y - b.size.y);
+        const floorCands = sortedByHeight.slice(0, 4);
+        const blockCands = sortedByHeight.slice(4);
+
+        const sortedByLocalX = [...floorCands].sort((a, b) => a.center.x - b.center.x);
+        const sortedByLocalZ = [...floorCands].sort((a, b) => a.center.z - b.center.z);
+
+        floorCands.forEach(cand => {
+          const isWest = sortedByLocalX.indexOf(cand) < 2;
+          const isSouth = sortedByLocalZ.indexOf(cand) < 2;
+
+          let suffix = "NE";
+          if (!isWest && !isSouth) suffix = "NE";
+          else if (isWest && !isSouth) suffix = "NW";
+          else if (!isWest && isSouth) suffix = "SE";
+          else if (isWest && isSouth) suffix = "SW";
+          
+          cand.item.name = `enviroTest_floor_${suffix}`;
+        });
+
+        const sortedBlocksByHeight = [...blockCands].sort((a, b) => a.size.y - b.size.y);
+        sortedBlocksByHeight[0].item.name = "enviroTest_obstacle";
+        sortedBlocksByHeight[1].item.name = "enviroTest_low_wall";
+        sortedBlocksByHeight[2].item.name = "enviroTest_mid_wall";
+        sortedBlocksByHeight[3].item.name = "enviroTest_high_wall";
+
+        const refFloor = floorCands[0];
+        const floorWidth = Math.max(refFloor.size.x, refFloor.size.z);
+        this.kitScaleFactor = floorWidth > 0.01 ? 4.0 / floorWidth : 1.0;
+        console.log(`[Preload Classification]: Calibrated and cataloged 8 assets. Kit scale factor is ${this.kitScaleFactor}`);
+      }
+
+      // Deactivate main library root node so it functions purely as an unrendered asset catalog pool
+      if (this.libraryItems.length > 1) {
+        importedRoot.setEnabled(false);
+        result.meshes.forEach(m => {
+          m.setEnabled(false);
+          m.visibility = 0.0;
+        });
+      } else {
+        importedRoot.setEnabled(true);
+      }
+
+      if (this.onLibraryItemsChanged) {
+        this.onLibraryItemsChanged(this.libraryItems.map(item => ({ id: item.id, name: item.name })));
+      }
+
+      const uniqueId = "asset_preloaded_enviro";
+      const newAsset: ModelAssetInfo = {
+        id: uniqueId,
+        name: "enviroTest.glb",
+        type: "environment",
+        source: "file",
+        filePath: "enviroTest.glb",
+        meshCount: result.meshes.length,
+      };
+
+      this.loadedAssets.push(newAsset);
+      this.onAssetListChanged([...this.loadedAssets]);
+
+      console.log(`Preloaded Enviro GLB parsed successfully: Discovered ${this.libraryItems.length} components.`);
+
+      // Automatically arrange layout on startup
+      this.autoArrangeLibrary();
+
+    } catch (e) {
+      console.error("Failed to preload enviroTest.glb", e);
+    }
+  }
+
+  /**
    * Instantiates a single piece chosen from the asset library and places it at the clicked location
    */
   public instantiateLibraryItem(itemId: string, position: Vector3): TransformNode | null {

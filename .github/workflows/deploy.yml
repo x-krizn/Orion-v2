@@ -5,6 +5,18 @@ on:
     branches:
       - main
       - master
+    paths-ignore:
+      - '**.glb'
+      - '**.gltf'
+      - '**.png'
+      - '**.jpg'
+      - '**.gif'
+      - '**.ico'
+      - '**.svg'
+      - '**.md'
+      - '.gitignore'
+      - 'public/assets/**'
+  workflow_dispatch:
 
 permissions:
   contents: write
