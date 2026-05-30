@@ -352,6 +352,8 @@ export class EnvironmentManager {
 
       leafMeshes.forEach((mesh, idx) => {
         if (mesh.getTotalVertices() > 0) {
+          mesh.computeWorldMatrix(true);
+          mesh.setParent(importedRoot);
           tempItems.push({
             id: `lib_${mesh.name || mesh.id}_${idx}_${Date.now()}`,
             name: mesh.name,
@@ -551,6 +553,8 @@ export class EnvironmentManager {
 
       leafMeshes.forEach((mesh, idx) => {
         if (mesh.getTotalVertices() > 0) {
+          mesh.computeWorldMatrix(true);
+          mesh.setParent(importedRoot);
           tempItems.push({
             id: `lib_${mesh.name || mesh.id}_${idx}_${Date.now()}`,
             name: mesh.name,

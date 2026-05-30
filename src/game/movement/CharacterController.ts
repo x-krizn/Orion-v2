@@ -64,6 +64,12 @@ export class CharacterController {
   private isDashing = false;
   private dashCooldownTimer = 0;
   private dashDirection: Vector3 = new Vector3(0, 0, 1);
+  private dashCooldownDuration = 1.0;
+  private dashSpeedMultiplier = 3.5;
+
+  // Active Status Effects
+  private activeStatusEffect: any = null;
+  private statusEffectRemainingTimer = 0;
 
   constructor(scene: Scene, settings: GameSettings["movement"], boundsSize: number) {
     this.scene = scene;
@@ -424,7 +430,7 @@ export class CharacterController {
     if (this.dashCooldownTimer > 0 || this.isDashing) return false;
 
     this.isDashing = true;
-    this.dashCooldownTimer = 1.0; // 1 second cooldown
+    this.dashCooldownTimer = this.dashCooldownDuration; // Cooldown from abilities configuration
     
     // If direction is zero, dash forward (along current heading)
     if (direction.length() === 0) {
@@ -455,6 +461,26 @@ export class CharacterController {
       this.dashCooldownTimer -= deltaTimeSeconds;
     }
 
+    // Process status effects
+    if (this.statusEffectRemainingTimer > 0) {
+      this.statusEffectRemainingTimer -= deltaTimeSeconds;
+      if (this.statusEffectRemainingTimer <= 0) {
+        this.activeStatusEffect = null;
+        console.log("[DataManager]: Status effect expired on character.");
+      } else if (fx && this.activeStatusEffect) {
+        // Periodically emit active color-themed particles
+        if (Math.random() < 0.25) {
+          const auraColor = this.activeStatusEffect.particleColor;
+          const auraPos = this.rootNode.position.add(new Vector3(
+            (Math.random() - 0.5) * 1.6,
+            0.1 + Math.random() * 1.8,
+            (Math.random() - 0.5) * 1.6
+          ));
+          fx.spawnBoosterTrail(auraPos, new Vector3(0, 0.4, 0), true);
+        }
+      }
+    }
+
     // 2. Pulse emissive rings over time index
     this.pulseTimer += deltaTimeSeconds * 4;
     const pulseFactor = 0.75 + Math.sin(this.pulseTimer) * 0.25;
@@ -480,13 +506,18 @@ export class CharacterController {
     // 3. Compute frame velocity vectors
     this.velocity.setAll(0);
 
+    let activeSpeed = this.settings.speed;
+    if (this.activeStatusEffect && this.activeStatusEffect.modifiers && this.activeStatusEffect.modifiers.speedMult !== undefined) {
+      activeSpeed *= this.activeStatusEffect.modifiers.speedMult;
+    }
+
     if (this.isDashing) {
       // Dash burst speed
-      const dashSpeed = this.settings.speed * 3.5;
+      const dashSpeed = this.settings.speed * this.dashSpeedMultiplier;
       this.velocity.copyFrom(this.dashDirection).scaleInPlace(dashSpeed);
     } else if (input.moveDirection.length() > 0) {
       // Responsive uniform translation
-      this.velocity.copyFrom(input.moveDirection).scaleInPlace(this.settings.speed);
+      this.velocity.copyFrom(input.moveDirection).scaleInPlace(activeSpeed);
 
       // Determine rotation heading (Angle between X and Z dimensions)
       this.targetRotation = Math.atan2(input.moveDirection.x, input.moveDirection.z);
@@ -576,5 +607,27 @@ export class CharacterController {
 
   public getDashCooldownProgress(): number {
     return Math.max(0, this.dashCooldownTimer);
+  }
+
+  public applyStatusEffect(effect: any): void {
+    this.activeStatusEffect = effect;
+    this.statusEffectRemainingTimer = effect.duration;
+    console.log(`[Player]: Status effect ${effect.name} applied for ${effect.duration}s!`);
+    
+    // Impact flash
+    this.triggerImpactFlash();
+  }
+
+  public getActiveStatusEffect(): any {
+    return this.activeStatusEffect;
+  }
+
+  public getStatusEffectRemaining(): number {
+    return Math.max(0, this.statusEffectRemainingTimer);
+  }
+
+  public updateDashConfig(cooldown: number, speedMultiplier: number): void {
+    this.dashCooldownDuration = cooldown;
+    this.dashSpeedMultiplier = speedMultiplier;
   }
 }

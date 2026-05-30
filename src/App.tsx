@@ -104,9 +104,19 @@ export default function App() {
   const [fov, setFov] = useState<number>(0.35);
   const [cameraDist, setCameraDist] = useState<number>(36);
   const [pitch, setPitch] = useState<number>(40);
-  const [activeTab, setActiveTab] = useState<"settings" | "effects" | "help" | "json">("settings");
+  const [activeTab, setActiveTab] = useState<"settings" | "effects" | "help" | "json" | "loadouts">("loadouts");
   const [showJoystick, setShowJoystick] = useState<boolean>(true);
   const [showTelemetry, setShowTelemetry] = useState<boolean>(true);
+
+  // Dynamic loaded game database states
+  const [weapons, setWeapons] = useState<any[]>([]);
+  const [abilities, setAbilities] = useState<any[]>([]);
+  const [statusEffects, setStatusEffects] = useState<any[]>([]);
+  const [maps, setMaps] = useState<any[]>([]);
+  const [enemies, setEnemies] = useState<any[]>([]);
+  const [equippedWeaponId, setEquippedWeaponId] = useState<string>("pulse_cannon");
+  const [activePlayerStatus, setActivePlayerStatus] = useState<any>(null);
+  const [statusTimeLeft, setStatusTimeLeft] = useState<number>(0);
 
   // Active cooldown ratios
   const [dashCooldown, setDashCooldown] = useState<number>(0);
@@ -135,11 +145,23 @@ export default function App() {
         }
       }
     );
+
+    // Bind data loading listeners to React state
+    gm.onWeaponsLoaded = (weaps) => setWeapons(weaps);
+    gm.onAbilitiesLoaded = (abils) => setAbilities(abils);
+    gm.onStatusEffectsLoaded = (effects) => setStatusEffects(effects);
+    gm.onMapsLoaded = (mList) => setMaps(mList);
+    gm.onEnemiesLoaded = (eList) => setEnemies(eList);
     
     // Wire performance telemetry callbacks
     gm.addPerformanceListener((latestStats) => {
       setStats(latestStats);
       setDashCooldown(gm.player.getDashCooldownProgress());
+      
+      // Update dynamic live HUD trackers
+      setEquippedWeaponId(gm.equippedWeaponId);
+      setActivePlayerStatus(gm.player.getActiveStatusEffect());
+      setStatusTimeLeft(gm.player.getStatusEffectRemaining());
     });
 
     gameManagerRef.current = gm;
@@ -563,11 +585,21 @@ export default function App() {
               CAMERA
             </button>
             <button
+              onClick={() => setActiveTab("loadouts")}
+              className={`p-1 px-2.5 rounded text-[10px] font-mono border transition-all cursor-pointer ${
+                activeTab === "loadouts"
+                  ? "bg-orange-500/15 border-orange-500 text-orange-400 font-bold"
+                  : "border-white/5 text-white/50 hover:text-white"
+              }`}
+            >
+              LOADOUTS
+            </button>
+            <button
               onClick={() => setActiveTab("effects")}
               className={`p-1 px-2.5 rounded text-[10px] font-mono border transition-all cursor-pointer ${
                 activeTab === "effects"
                   ? "bg-orange-500/15 border-orange-500 text-orange-400 font-bold"
-                  : "border-white/5 text-white/50 hover:text-white"
+                  : "border-[#d1d1d6]/5 hover:text-white"
               }`}
             >
               SHADERS
@@ -595,6 +627,146 @@ export default function App() {
             </button>
           </div>
         </div>
+
+        {activeTab === "loadouts" && (
+          <div className="space-y-4">
+            {/* Equipped Weapon indicator & inventory */}
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 block tracking-widest mb-1.5 uppercase">
+                ⚔️ PRIMARY WEAPON ARSENAL
+              </span>
+              <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1">
+                {weapons.map((w) => {
+                  const isEquipped = equippedWeaponId === w.id;
+                  return (
+                    <button
+                      key={w.id}
+                      onClick={() => {
+                        gameManagerRef.current?.equipWeapon(w.id);
+                        setEquippedWeaponId(w.id);
+                      }}
+                      className={`w-full text-left p-2 rounded border text-xs font-mono transition-all cursor-pointer flex items-center justify-between ${
+                        isEquipped
+                          ? "bg-orange-500/15 border-orange-500 text-white font-bold"
+                          : "border-white/5 bg-black/40 text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center space-x-1.5 font-sans">
+                          <span className={`font-mono ${
+                            w.rarity === "legendary" ? "text-yellow-400 font-bold" :
+                            w.rarity === "epic" ? "text-purple-400" :
+                            w.rarity === "rare" ? "text-blue-400" : "text-slate-400"
+                          } uppercase text-[9px] font-semibold tracking-wider p-0.5 px-1 bg-black/40 rounded`}>
+                            {w.rarity}
+                          </span>
+                          <span className="font-mono">{w.name}</span>
+                        </div>
+                        <p className="text-[10px] text-[#cbd5e1] font-sans mt-0.5 leading-none">
+                          {w.description}
+                        </p>
+                      </div>
+                      <div className="text-right flex flex-col items-end">
+                        <span className="text-orange-400 font-bold text-[10px]">DMG: {w.damage}</span>
+                        <span className="text-[9px] text-[#cbd5e1]/60">{w.cooldown}s CD</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Status effects */}
+            <div className="border-t border-white/5 pt-3">
+              <span className="text-[10px] font-bold text-[#b45309] block tracking-widest mb-2 uppercase font-bold">
+                🧬 TACTICAL STATUS BOOSTER
+              </span>
+              <div className="grid grid-cols-2 gap-1.5 mb-2">
+                {statusEffects.map((effect) => {
+                  const isActive = activePlayerStatus && activePlayerStatus.id === effect.id;
+                  return (
+                    <button
+                      key={effect.id}
+                      style={{ color: "#cbd5e1" }}
+                      onClick={() => {
+                        gameManagerRef.current?.triggerPlayerStatusEffect(effect.id);
+                        setActivePlayerStatus(effect);
+                      }}
+                      className={`text-center p-1.5 rounded border text-[10px] font-mono transition-all cursor-pointer flex flex-col items-center justify-center ${
+                        isActive
+                          ? "bg-[#ff6f00]/15 border-orange-500 text-white font-bold shadow-[0_0_8px_rgba(255,111,0,0.2)]"
+                          : "border-white/5 bg-black/40 hover:text-white"
+                      }`}
+                    >
+                      <span className="font-bold flex items-center space-x-1 uppercase text-[9px]">
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: `rgb(${effect.particleColor.r * 255}, ${effect.particleColor.g * 255}, ${effect.particleColor.b * 255})` }} />
+                        <span>{effect.name}</span>
+                      </span>
+                      <span className="text-[8px] text-[#94a3b8] mt-0.5 font-sans leading-tight">
+                        {effect.description}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Active boost status card if present */}
+              {activePlayerStatus && (
+                <div className="p-2 rounded border border-orange-500/20 bg-[#120f0d]/90 font-mono text-[10px] leading-relaxed flex items-center justify-between">
+                  <div>
+                    <span className="text-orange-400 font-bold block uppercase tracking-widest text-[9px]">
+                      ⚡ ACTIVE SYSTEM OVERLAYS
+                    </span>
+                    <span className="text-white text-[11px] font-bold uppercase">{activePlayerStatus.name}</span>
+                    <div className="grid grid-cols-2 gap-x-2 text-slate-400 text-[9px] mt-1">
+                      {activePlayerStatus.modifiers.speedMult !== undefined && (
+                        <span>SPEED: {activePlayerStatus.modifiers.speedMult > 1 ? "+" : ""}{((activePlayerStatus.modifiers.speedMult - 1) * 100).toFixed(0)}%</span>
+                      )}
+                      {activePlayerStatus.modifiers.damageMult !== undefined && (
+                        <span>DMG: {activePlayerStatus.modifiers.damageMult > 1 ? "+" : ""}{((activePlayerStatus.modifiers.damageMult - 1) * 100).toFixed(0)}%</span>
+                      )}
+                      {activePlayerStatus.modifiers.cooldownMult !== undefined && (
+                        <span>COOLDOWN: {activePlayerStatus.modifiers.cooldownMult < 1 ? "-" : "+"}{Math.abs((activePlayerStatus.modifiers.cooldownMult - 1) * 100).toFixed(0)}%</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[#cbd5e1]/40 block uppercase font-bold text-[8px]">REMAINING</span>
+                    <span className="text-orange-400 font-bold text-[14px]">{statusTimeLeft.toFixed(1)}s</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Sandbox spawner settings indicator */}
+            <div className="border-t border-white/5 pt-3">
+              <span className="text-[10px] font-bold text-slate-400 block tracking-widest mb-1.5 uppercase">
+                💀 SANDBOX COHORT SPAWNER (CLICK GROUND)
+              </span>
+              <p className="text-[10px] text-[#cbd5e1]/70 font-sans mb-2 leading-tight">
+                To spawn entities matching templates, select them in <strong className="text-orange-500">ASSET BUILDER</strong> below and click the floor coordinates.
+              </p>
+              <div className="space-y-1 bg-black/30 p-1.5 rounded border border-white/5">
+                <span className="text-[9px] font-bold text-[#b45309] uppercase tracking-widest block font-mono">
+                  Loaded Templates ({enemies.length})
+                </span>
+                <div className="grid grid-cols-2 gap-1 font-mono text-[9px]">
+                  {enemies.map((e) => (
+                    <div key={e.id} className="p-1 rounded bg-[#09090c] border border-white/5 flex flex-col leading-none">
+                      <span className="font-bold text-[#f8fafc] truncate" style={{ borderLeft: `2.5px solid rgb(${e.color.r * 255}, ${e.color.g * 255}, ${e.color.b * 255})`, paddingLeft: "3.5px" }}>
+                        {e.name}
+                      </span>
+                      <div className="flex justify-between items-center text-slate-400 mt-1 max-w-full">
+                        <span>HP: {e.health}</span>
+                        <span>SF: {e.scale}x</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {activeTab === "settings" && (
           <div className="space-y-4">

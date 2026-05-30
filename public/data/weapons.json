@@ -1,0 +1,54 @@
+[
+  {
+    "id": "pulse_cannon",
+    "name": "Pulse Cannon",
+    "description": "Rapid-fire energy weapon.",
+    "mesh": "models/weapons/pulse_cannon.glb",
+    "icon": "textures/icons/pulse_cannon.png",
+    "damage": 25,
+    "heatCost": 10,
+    "cooldown": 0.25,
+    "projectile": "pulse_projectile",
+    "sound": "pulse_fire",
+    "rarity": "standard"
+  },
+  {
+    "id": "vortex_rifle",
+    "name": "Gravity Vortex Rifle",
+    "description": "Fires spatial compressing distortion orbs pulling elements in.",
+    "mesh": "models/weapons/vortex_rifle.glb",
+    "icon": "textures/icons/vortex_rifle.png",
+    "damage": 65,
+    "heatCost": 35,
+    "cooldown": 1.1,
+    "projectile": "gravity_orb",
+    "sound": "vortex_implode",
+    "rarity": "rare"
+  },
+  {
+    "id": "hyperion_gatling",
+    "name": "Hyperion Laser-Gatling",
+    "description": "Sustained heavy ballistic beam gun that shred targets in milliseconds.",
+    "mesh": "models/weapons/hyperion_gatling.glb",
+    "icon": "textures/icons/hyperion_gatling.png",
+    "damage": 8,
+    "heatCost": 5,
+    "cooldown": 0.05,
+    "projectile": "micro_laser",
+    "sound": "laser_spin",
+    "rarity": "epic"
+  },
+  {
+    "id": "singular_lance",
+    "name": "Void Singularity Lance",
+    "description": "Experimental tachyon weapon disintegrating anything in its path.",
+    "mesh": "models/weapons/singular_lance.glb",
+    "icon": "textures/icons/singular_lance.png",
+    "damage": 500,
+    "heatCost": 100,
+    "cooldown": 4.5,
+    "projectile": "tachyon_flare",
+    "sound": "lance_burst",
+    "rarity": "legendary"
+  }
+]

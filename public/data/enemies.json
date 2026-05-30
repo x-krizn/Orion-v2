@@ -1,0 +1,50 @@
+[
+  {
+    "id": "enemy_scout",
+    "name": "Recon Drone Unit-S1",
+    "description": "Highly mobile scout hover drone. Low armor, standard speed.",
+    "health": 80,
+    "speed": 6.5,
+    "damage": 10,
+    "attackRange": 12,
+    "color": { "r": 0.1, "g": 0.8, "b": 1.0 },
+    "scale": 0.8,
+    "mesh": "models/enemies/scout.glb"
+  },
+  {
+    "id": "enemy_reaper",
+    "name": "Vanguard Titan-V9",
+    "description": "Reinforced armored bipod combat carrier with heavy projectile output.",
+    "health": 350,
+    "speed": 2.5,
+    "damage": 35,
+    "attackRange": 8,
+    "color": { "r": 1.0, "g": 0.2, "b": 0.2 },
+    "scale": 1.4,
+    "mesh": "models/enemies/reaper.glb"
+  },
+  {
+    "id": "enemy_turret",
+    "name": "Defense Sentry S-100",
+    "description": "Stationary automated laser defense structure.",
+    "health": 200,
+    "speed": 0.0,
+    "damage": 15,
+    "attackRange": 16,
+    "color": { "r": 0.9, "g": 0.6, "b": 0.1 },
+    "scale": 1.1,
+    "mesh": "models/enemies/turret.glb"
+  },
+  {
+    "id": "boss_leviathan",
+    "name": "Goliath Leviathan Class Mk.X",
+    "description": "Extreme threat colossal command tank emitting devastating homing fireballs.",
+    "health": 1500,
+    "speed": 1.5,
+    "damage": 75,
+    "attackRange": 20,
+    "color": { "r": 1.0, "g": 0.0, "b": 0.9 },
+    "scale": 2.2,
+    "mesh": "models/enemies/leviathan.glb"
+  }
+]

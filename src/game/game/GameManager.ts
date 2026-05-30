@@ -12,6 +12,9 @@ import {
   DefaultRenderingPipeline,
   ImageProcessingConfiguration,
   SceneLoader,
+  StandardMaterial,
+  MeshBuilder,
+  TransformNode
 } from "@babylonjs/core";
 import { GameSettings, PerformanceStats, ModelAssetInfo, PlayerInput } from "../types";
 import { InputController } from "../input/InputController";
@@ -19,6 +22,7 @@ import { IsometricCamera } from "../camera/IsometricCamera";
 import { EnvironmentManager } from "../rendering/EnvironmentManager";
 import { CharacterController } from "../movement/CharacterController";
 import { FXSystem } from "../fx/FXSystem";
+import { DataManager, WeaponData, AbilityData, EnemyData, StatusEffectData, MapData } from "./DataManager";
 
 export class GameManager {
   private engine!: Engine;
@@ -82,9 +86,24 @@ export class GameManager {
   public selectedLibraryItemId: string | null = null;
   public placementModeActive: boolean = false;
 
+  // Real-time loadouts & sandbox features
+  public equippedWeaponId: string = "pulse_cannon";
+  public spawnedEnemies: {
+    node: TransformNode;
+    data: EnemyData;
+    health: number;
+    maxHealth: number;
+  }[] = [];
+
   // Callbacks
   private onAssetListChanged: (assets: ModelAssetInfo[]) => void = () => {};
   public onLibraryItemsChanged: (items: { id: string; name: string }[]) => void = () => {};
+
+  public onWeaponsLoaded?: (weapons: WeaponData[]) => void;
+  public onAbilitiesLoaded?: (abilities: AbilityData[]) => void;
+  public onStatusEffectsLoaded?: (effects: StatusEffectData[]) => void;
+  public onMapsLoaded?: (maps: MapData[]) => void;
+  public onEnemiesLoaded?: (enemies: EnemyData[]) => void;
 
   constructor(
     canvas: HTMLCanvasElement, 
@@ -104,6 +123,11 @@ export class GameManager {
     this.registerDragAndDrop();
     this.preloadDefaultAssets();
     this.startLoop();
+
+    // Trigger data loading asynchronously at startup
+    DataManager.getInstance().loadAllData().then(() => {
+      this.onDataLoaded();
+    });
   }
 
   private initEngine(): void {
@@ -207,10 +231,15 @@ export class GameManager {
     this.scene.onPointerDown = (evt, pickResult) => {
       if (this.placementModeActive && this.selectedLibraryItemId) {
         if (pickResult.hit && pickResult.pickedPoint && pickResult.pickedMesh && pickResult.pickedMesh.name === "cyberGround") {
-          const placedNode = this.environment.instantiateLibraryItem(this.selectedLibraryItemId, pickResult.pickedPoint);
-          if (placedNode) {
-            // Deploy cyber flare effect
-            this.fx.spawnExplosion(pickResult.pickedPoint, 6, 0.45);
+          if (this.selectedLibraryItemId.startsWith("enemy_")) {
+            const enemyId = this.selectedLibraryItemId.replace("enemy_", "");
+            this.spawnEnemyAt(enemyId, pickResult.pickedPoint);
+          } else {
+            const placedNode = this.environment.instantiateLibraryItem(this.selectedLibraryItemId, pickResult.pickedPoint);
+            if (placedNode) {
+              // Deploy cyber flare effect
+              this.fx.spawnExplosion(pickResult.pickedPoint, 6, 0.45);
+            }
           }
         }
       }
@@ -261,9 +290,18 @@ export class GameManager {
   }
 
   /**
-   * Alternating guns projectiles deployment
+   * Alternating guns projectiles deployment using dynamic data-driven weapon stats
    */
   private fireActiveArm(): void {
+    const weapon = this.getEquippedWeapon() || {
+      id: "pulse_cannon",
+      name: "Pulse Cannon",
+      damage: 25,
+      cooldown: 0.25,
+      projectile: "pulse_projectile",
+      rarity: "standard"
+    };
+
     const muzzlePos = this.player.getMuzzlePointAndAlt();
     const targetPoint = this.get3DWorldPointerPos();
 
@@ -272,12 +310,45 @@ export class GameManager {
     heading.y = 0; // Fixed 2D plane height logic
     heading.normalize();
 
-    this.cameraSystem.triggerShake(0.18);
+    // Dynamic weapon shake based on rarity/power
+    let shakeStrength = 0.18;
+    if (weapon.rarity === "rare") shakeStrength = 0.3;
+    if (weapon.rarity === "epic") shakeStrength = 0.5;
+    if (weapon.rarity === "legendary") shakeStrength = 0.85;
+    this.cameraSystem.triggerShake(shakeStrength);
+
+    // Fetch active status effects on user
+    const activeEffect = this.player.getActiveStatusEffect();
+
     this.fx.spawnLaserShell(muzzlePos, heading, 40, () => {
       // Collision hit impact trigger
       const hitPoint = muzzlePos.add(heading.scale(15)); // Mock impact point
       this.fx.spawnHitImpact(hitPoint);
       
+      // Calculate active base damage and overlay status buffs
+      let finalDamage = weapon.damage;
+      if (activeEffect && activeEffect.modifiers && activeEffect.modifiers.damageMult !== undefined) {
+        finalDamage *= activeEffect.modifiers.damageMult;
+      }
+
+      // Check bullet intersection hits against spawned enemies
+      this.spawnedEnemies.forEach((enemy, index) => {
+        const dist = Vector3.Distance(enemy.node.position, hitPoint);
+        // Generous collision hitbox with scale influence
+        if (dist < 3.2 * enemy.data.scale) {
+          enemy.health -= finalDamage;
+          this.fx.spawnExplosion(enemy.node.position, 4, 0.3);
+          console.log(`[Combat]: Bullet Impact! Enemy: ${enemy.data.name}, Damage: ${finalDamage.toFixed(0)}, Health: ${enemy.health}/${enemy.maxHealth}`);
+
+          if (enemy.health <= 0) {
+            this.fx.spawnExplosion(enemy.node.position, 16, 1.4);
+            this.cameraSystem.triggerShake(1.0);
+            enemy.node.dispose();
+            this.spawnedEnemies.splice(index, 1);
+          }
+        }
+      });
+
       // Random obstacles collision check
       const obstacles = this.environment.getObstacles();
       // Small chance to animate obstacles pulsing when hit
@@ -290,37 +361,220 @@ export class GameManager {
   }
 
   /**
-   * Laser rail beam ability
+   * Laser rail beam ability reading from abilities.json config
    */
   private fireHeavyFusionGatling(): void {
     const muzzlePos = this.player.getMuzzlePointAndAlt();
     const targetPoint = this.get3DWorldPointerPos();
 
-    this.cameraSystem.triggerShake(1.2);
+    const config = DataManager.getInstance().getAbilityById("heavy_railbeam") || {
+      damage: 150,
+      range: 25,
+      intensity: 1.2
+    };
+
+    const shakeFactor = 1.0 * (config.intensity || 1.2);
+    this.cameraSystem.triggerShake(shakeFactor);
     this.fx.spawnHeavyBeam(muzzlePos, targetPoint);
     this.fx.spawnExplosion(targetPoint, 10, 0.8);
     this.player.triggerImpactFlash();
+
+    // Beam weapon collision check with wide hit area
+    const activeEffect = this.player.getActiveStatusEffect();
+    let finalDamage = config.damage || 150;
+    if (activeEffect && activeEffect.modifiers && activeEffect.modifiers.damageMult !== undefined) {
+      finalDamage *= activeEffect.modifiers.damageMult;
+    }
+
+    this.spawnedEnemies.forEach((enemy, index) => {
+      const dist = Vector3.Distance(enemy.node.position, targetPoint);
+      if (dist < 5.0 * enemy.data.scale) {
+        enemy.health -= finalDamage;
+        this.fx.spawnExplosion(enemy.node.position, 6, 0.5);
+        console.log(`[Combat]: Railbeam Burn! Enemy: ${enemy.data.name}, Damage: ${finalDamage.toFixed(0)}, Health: ${enemy.health}/${enemy.maxHealth}`);
+
+        if (enemy.health <= 0) {
+          this.fx.spawnExplosion(enemy.node.position, 16, 1.4);
+          this.cameraSystem.triggerShake(1.2);
+          enemy.node.dispose();
+          this.spawnedEnemies.splice(index, 1);
+        }
+      }
+    });
   }
 
   /**
-   * Heavy shell mortars landing on random bounds near pointer circles
+   * Heavy shell mortars landing on random bounds near pointer circles reading from abilities.json config
    */
   private triggerTaticalOrbitalBombardment(): void {
     const centerPoint = this.get3DWorldPointerPos();
-    this.cameraSystem.triggerShake(2.0);
+
+    const config = DataManager.getInstance().getAbilityById("tactical_bombardment") || {
+      damage: 200,
+      strikeCount: 4,
+      spread: 5,
+      intensity: 1.5
+    };
+
+    const shakeFactor = 1.35 * (config.intensity || 1.5);
+    this.cameraSystem.triggerShake(shakeFactor);
+
+    const strikes = config.strikeCount || 4;
+    const spread = config.spread || 5;
+    const baseDamage = config.damage || 200;
+
+    const activeEffect = this.player.getActiveStatusEffect();
+    let finalDamage = baseDamage;
+    if (activeEffect && activeEffect.modifiers && activeEffect.modifiers.damageMult !== undefined) {
+      finalDamage *= activeEffect.modifiers.damageMult;
+    }
 
     // Call falling shells sequentially with timeouts
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < strikes; i++) {
       setTimeout(() => {
         const offset = new Vector3(
-          (Math.random() - 0.5) * 5,
+          (Math.random() - 0.5) * spread,
           0,
-          (Math.random() - 0.5) * 5
+          (Math.random() - 0.5) * spread
         );
         const blastLocation = centerPoint.add(offset);
         this.fx.spawnExplosion(blastLocation, 14, 1.2);
+
+        // Check if any enemy is caught in mortar explosion radius
+        this.spawnedEnemies.forEach((enemy, index) => {
+          const dist = Vector3.Distance(enemy.node.position, blastLocation);
+          if (dist < 4.2 * enemy.data.scale) {
+            enemy.health -= finalDamage;
+            this.fx.spawnExplosion(enemy.node.position, 7, 0.6);
+            console.log(`[Combat]: Mortar Impact! Enemy: ${enemy.data.name}, Damage: ${finalDamage.toFixed(0)}, Health: ${enemy.health}/${enemy.maxHealth}`);
+
+            if (enemy.health <= 0) {
+              this.fx.spawnExplosion(enemy.node.position, 16, 1.4);
+              this.cameraSystem.triggerShake(1.5);
+              enemy.node.dispose();
+              this.spawnedEnemies.splice(index, 1);
+            }
+          }
+        });
       }, i * 200);
     }
+  }
+
+  private onDataLoaded(): void {
+    console.log("[GameManager]: Runtime configuration loaded. Applying dynamic stats...");
+    const dataManager = DataManager.getInstance();
+    
+    // Find dash ability if present to update character physics
+    const dash = dataManager.abilities.find(a => a.id.includes("dash") || a.id.includes("propulsion"));
+    if (dash && this.player) {
+      this.player.updateDashConfig(dash.cooldown, dash.speedMultiplier || 3.5);
+    }
+
+    // Expose weapons to HUD
+    if (this.onWeaponsLoaded) {
+      this.onWeaponsLoaded(dataManager.weapons);
+    }
+    // Expose abilities to HUD
+    if (this.onAbilitiesLoaded) {
+      this.onAbilitiesLoaded(dataManager.abilities);
+    }
+    // Expose status effects to HUD
+    if (this.onStatusEffectsLoaded) {
+      this.onStatusEffectsLoaded(dataManager.statusEffects);
+    }
+    // Expose maps to HUD
+    if (this.onMapsLoaded) {
+      this.onMapsLoaded(dataManager.maps);
+    }
+    // Expose enemies to HUD
+    if (this.onEnemiesLoaded) {
+      this.onEnemiesLoaded(dataManager.enemies);
+    }
+
+    // Combine standard Custom Asset list with our newly loaded spawnable enemies list for sandbox selection!
+    const libraryItemsList = [
+      ...dataManager.enemies.map(e => ({ id: `enemy_${e.id}`, name: `💀 Spawn: ${e.name}` })),
+    ];
+    this.onLibraryItemsChanged(libraryItemsList);
+  }
+
+  public spawnEnemyAt(enemyId: string, position: Vector3): void {
+    const data = DataManager.getInstance().getEnemyById(enemyId);
+    if (!data) return;
+
+    // Build a beautiful 3D representation representing this enemy
+    const enemyRoot = new TransformNode(`enemy_spawn_${data.id}_${Date.now()}`, this.scene);
+    enemyRoot.position.copyFrom(position);
+    enemyRoot.position.y = 0;
+
+    // Frame/Chassis material and styling
+    const frameMat = new StandardMaterial(`mat_enemy_${data.id}_${Date.now()}`, this.scene);
+    frameMat.diffuseColor = new Color3(data.color.r, data.color.g, data.color.b);
+    frameMat.emissiveColor = new Color3(data.color.r * 0.25, data.color.g * 0.25, data.color.b * 0.25);
+    frameMat.specularColor = new Color3(0.5, 0.5, 0.5);
+
+    // Body Cylinder
+    const body = MeshBuilder.CreateCylinder(`enemyBody_${data.id}`, {
+      diameterTop: 0.8 * data.scale,
+      diameterBottom: 1.2 * data.scale,
+      height: 1.6 * data.scale
+    }, this.scene);
+    body.position.y = (1.6 * data.scale) / 2;
+    body.material = frameMat;
+    body.parent = enemyRoot;
+
+    // Glowing Eyes Indicator
+    const eyeMat = new StandardMaterial(`enemyEyeMat_${data.id}`, this.scene);
+    eyeMat.emissiveColor = new Color3(1.0, 0, 0);
+    const eye = MeshBuilder.CreateBox(`enemyEye_${data.id}`, {
+      width: 0.7 * data.scale,
+      height: 0.15 * data.scale,
+      depth: 0.2 * data.scale
+    }, this.scene);
+    eye.position.set(0, 1.2 * data.scale, 0.5 * data.scale);
+    eye.material = eyeMat;
+    eye.parent = enemyRoot;
+
+    // Feed shadows if possible
+    const shadowGenerator = this.environment.getShadowGenerator();
+    if (shadowGenerator) {
+      shadowGenerator.addShadowCaster(body);
+    }
+
+    // Register active list
+    this.spawnedEnemies.push({
+      node: enemyRoot,
+      data: data,
+      health: data.health,
+      maxHealth: data.health
+    });
+
+    // Deploy spawn splash particle
+    this.fx.spawnExplosion(position, 8, 0.6);
+    this.player.triggerImpactFlash();
+    console.log(`[GameManager]: Spawned enemy ${data.name} at coordinates ${position.toString()}`);
+  }
+
+  public triggerPlayerStatusEffect(effectId: string): void {
+    const effect = DataManager.getInstance().getStatusEffectById(effectId);
+    if (effect && this.player) {
+      this.player.applyStatusEffect(effect);
+      this.fx.spawnExplosion(this.player.getPosition(), 8, 0.8);
+    }
+  }
+
+  public equipWeapon(weaponId: string): void {
+    const data = DataManager.getInstance().getWeaponById(weaponId);
+    if (data) {
+      this.equippedWeaponId = weaponId;
+      console.log(`[Combat]: Equipped weapon: ${data.name}`);
+      this.player.triggerImpactFlash();
+      this.fx.spawnExplosion(this.player.getPosition(), 6, 0.6);
+    }
+  }
+
+  public getEquippedWeapon(): WeaponData | undefined {
+    return DataManager.getInstance().getWeaponById(this.equippedWeaponId);
   }
 
   /**
@@ -408,39 +662,110 @@ export class GameManager {
   }
 
   /**
+   * Helper to verify if a path actually has a valid GLB before loading it
+   */
+  private async verifyGLBPath(url: string): Promise<boolean> {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) return false;
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.toLowerCase().includes("text/html") || contentType.toLowerCase().includes("text/plain")) {
+        return false;
+      }
+      
+      const reader = response.body?.getReader();
+      if (!reader) {
+        const buf = await response.arrayBuffer();
+        if (buf.byteLength < 4) return false;
+        const view = new DataView(buf);
+        return view.getUint32(0, true) === 0x46546C67 || view.getUint32(0, false) === 0x46546C67;
+      }
+      
+      const { value } = await reader.read();
+      reader.cancel();
+      if (!value || value.length < 4) return false;
+      
+      const isGLTF = String.fromCharCode(value[0], value[1], value[2], value[3]) === "glTF";
+      return isGLTF;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Automatically preload user uploaded custom models if they exist in the workspace assets paths
    */
   public async preloadDefaultAssets(): Promise<void> {
     // 1. Try preloading the player character model
-    const warriorPath = "./assets/models/mechs/warriorTest.glb";
-    try {
-      console.log("[Preloader]: Attempting to load user custom mech warriorTest.glb...");
-      const results = await SceneLoader.ImportMeshAsync("", "", warriorPath, this.scene, undefined, ".glb");
-      const modelRoot = results.meshes[0];
-      
-      this.player.attachCustomModel(modelRoot);
-      
-      const list: ModelAssetInfo = {
-        id: "preloaded_warrior",
-        name: "warriorTest.glb",
-        type: "character",
-        source: "file",
-        meshCount: results.meshes.length,
-      };
-      this.onAssetListChanged([list]);
-      console.log("[Preloader]: Successfully preloaded custom mech warriorTest.glb!");
-    } catch (e) {
-      console.log("[Preloader]: Custom warriorTest.glb is not present on workspace or could not load, using procedural model.", e);
+    const warriorPaths = [
+      "./assets/models/mechs/warriorTest.glb",
+      "/assets/models/mechs/warriorTest.glb",
+      "https://raw.githubusercontent.com/x-krizn/Orion-v2/main/public/assets/models/mechs/warriorTest.glb"
+    ];
+    
+    let loadedWarrior = false;
+    for (const path of warriorPaths) {
+      try {
+        console.log(`[Preloader]: Verifying custom mech warriorTest.glb at ${path}...`);
+        const isValid = await this.verifyGLBPath(path);
+        if (!isValid) {
+          console.log(`[Preloader]: Path ${path} does not contain a valid GLB asset. Skipping...`);
+          continue;
+        }
+
+        console.log(`[Preloader]: Path verified! Attempting to load user custom mech warriorTest.glb via ${path}...`);
+        const results = await SceneLoader.ImportMeshAsync("", "", path, this.scene, undefined, ".glb");
+        const modelRoot = results.meshes[0];
+        
+        this.player.attachCustomModel(modelRoot);
+        
+        const list: ModelAssetInfo = {
+          id: "preloaded_warrior",
+          name: "warriorTest.glb",
+          type: "character",
+          source: "file",
+          meshCount: results.meshes.length,
+        };
+        this.onAssetListChanged([list]);
+        console.log(`[Preloader]: Successfully preloaded custom mech warriorTest.glb via ${path}!`);
+        loadedWarrior = true;
+        break; // Stop on first success
+      } catch (e) {
+        console.warn(`[Preloader]: Path ${path} unsuccessful for warriorTest.glb:`, e);
+      }
+    }
+    if (!loadedWarrior) {
+      console.log("[Preloader]: Custom warriorTest.glb is not present on workspace or could not load on any path, using procedural model.");
     }
 
     // 2. Try preloading the arena environment model
-    const enviroPath = "./assets/tiles/enviroTest.glb";
-    try {
-      console.log("[Preloader]: Attempting to load user custom environment enviroTest.glb...");
-      await this.environment.preloadEnviroModelFromURL(enviroPath);
-      console.log("[Preloader]: Successfully preloaded custom environment enviroTest.glb!");
-    } catch (e) {
-      console.log("[Preloader]: Custom enviroTest.glb is not present on workspace or could not load, using default grid layout.", e);
+    const enviroPaths = [
+      "./assets/tiles/enviroTest.glb",
+      "/assets/tiles/enviroTest.glb",
+      "https://raw.githubusercontent.com/x-krizn/Orion-v2/main/public/assets/tiles/enviroTest.glb"
+    ];
+    
+    let loadedEnviro = false;
+    for (const path of enviroPaths) {
+      try {
+        console.log(`[Preloader]: Verifying custom environment enviroTest.glb at ${path}...`);
+        const isValid = await this.verifyGLBPath(path);
+        if (!isValid) {
+          console.log(`[Preloader]: Path ${path} does not contain a valid GLB asset. Skipping...`);
+          continue;
+        }
+
+        console.log(`[Preloader]: Path verified! Attempting to load user custom environment enviroTest.glb via ${path}...`);
+        await this.environment.preloadEnviroModelFromURL(path);
+        console.log(`[Preloader]: Successfully preloaded custom environment enviroTest.glb via ${path}!`);
+        loadedEnviro = true;
+        break; // Stop on first success
+      } catch (e) {
+        console.warn(`[Preloader]: Path ${path} unsuccessful for enviroTest.glb:`, e);
+      }
+    }
+    if (!loadedEnviro) {
+      console.log("[Preloader]: Custom enviroTest.glb is not present on workspace or could not load on any path, using default grid layout.");
     }
   }
 
@@ -466,6 +791,32 @@ export class GameManager {
 
     // Update Particles
     this.fx.update(deltaTimeSeconds);
+
+    // Dynamic hover motion & orientation of spawned enemies facing player
+    this.spawnedEnemies.forEach(enemy => {
+      // Interpolate angles towards player heading
+      const dir = this.player.getPosition().subtract(enemy.node.position);
+      dir.y = 0;
+      if (dir.length() > 0.1) {
+        dir.normalize();
+        const targetRotY = Math.atan2(dir.x, dir.z);
+        const diffY = targetRotY - enemy.node.rotation.y;
+        const wrapped = Math.atan2(Math.sin(diffY), Math.cos(diffY));
+        enemy.node.rotation.y += wrapped * Math.min(1.0, deltaTimeSeconds * 3.5);
+      }
+      
+      // Floating bounce animation loop
+      const hoverCycle = (performance.now() / 1000.0) * 3.0 + enemy.node.position.x * 2.0;
+      const yOffset = Math.sin(hoverCycle) * 0.12 * enemy.data.scale;
+      const children = enemy.node.getChildMeshes();
+      children.forEach(mesh => {
+        if (mesh.name.includes("Body")) {
+          mesh.position.y = ((1.6 * enemy.data.scale) / 2) + yOffset;
+        } else if (mesh.name.includes("Eye")) {
+          mesh.position.y = (1.2 * enemy.data.scale) + yOffset;
+        }
+      });
+    });
 
     // Reset instant triggers
     this.input.clearTriggers();
