@@ -609,6 +609,11 @@ export class GameManager {
     if (file.name.endsWith(".glb") || file.name.endsWith(".gltf")) {
       const targetWorldPos = this.get3DWorldPointerPos();
       
+      // If the uploaded file is warriorTest.glb or enviroTest.glb, upload it to the workspace server to persist it permanently
+      if (file.name === "warriorTest.glb" || file.name === "enviroTest.glb") {
+        this.uploadAssetToServer(file);
+      }
+      
       try {
         if (this.dndMode === "character") {
           // Wait for model parsing
@@ -634,6 +639,31 @@ export class GameManager {
       } catch (err) {
         console.error("Mesh injection error", err);
       }
+    }
+  }
+
+  /**
+   * Safe asynchronous upload of GLB custom assets to Express backend workspace so that they are permanent
+   */
+  private async uploadAssetToServer(file: File): Promise<void> {
+    try {
+      console.log(`[Asset Sync]: Syncing custom model "${file.name}" to workspace disk storage helper...`);
+      const response = await fetch("/api/upload-asset", {
+        method: "POST",
+        headers: {
+          "x-file-name": file.name,
+          "content-type": "application/octet-stream"
+        },
+        body: file
+      });
+      if (response.ok) {
+        console.log(`[Asset Sync]: Successfully saved and synchronized "${file.name}" on disk workspace! File path will be tracked by git.`);
+      } else {
+        const errText = await response.text();
+        console.warn(`[Asset Sync]: Server refused tracking/saving for "${file.name}":`, errText);
+      }
+    } catch (e) {
+      console.warn(`[Asset Sync]: Network error during upload to server for "${file.name}":`, e);
     }
   }
 
@@ -668,25 +698,21 @@ export class GameManager {
     try {
       const response = await fetch(url);
       if (!response.ok) return false;
+      
       const contentType = response.headers.get("content-type") || "";
       if (contentType.toLowerCase().includes("text/html") || contentType.toLowerCase().includes("text/plain")) {
         return false;
       }
       
-      const reader = response.body?.getReader();
-      if (!reader) {
-        const buf = await response.arrayBuffer();
-        if (buf.byteLength < 4) return false;
-        const view = new DataView(buf);
-        return view.getUint32(0, true) === 0x46546C67 || view.getUint32(0, false) === 0x46546C67;
-      }
+      const buf = await response.arrayBuffer();
+      if (buf.byteLength < 4) return false;
       
-      const { value } = await reader.read();
-      reader.cancel();
-      if (!value || value.length < 4) return false;
+      const view = new DataView(buf);
+      const magic = view.getUint32(0, true);
+      const magicBig = view.getUint32(0, false);
       
-      const isGLTF = String.fromCharCode(value[0], value[1], value[2], value[3]) === "glTF";
-      return isGLTF;
+      // GLB binary magic is 0x46546C67 (ASCII "glTF" in little-endian order) or 0x676C5446 in big-endian order
+      return magic === 0x46546C67 || magicBig === 0x676C5446;
     } catch {
       return false;
     }
