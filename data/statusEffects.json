@@ -1,0 +1,36 @@
+[
+  {
+    "id": "overdrive",
+    "name": "Overdrive",
+    "description": "Weapon fire rates accelerated by 50% & thrusters heavily boosted.",
+    "duration": 5.0,
+    "modifiers": {
+      "speedMult": 1.5,
+      "cooldownMult": 0.5,
+      "damageMult": 1.2
+    },
+    "particleColor": { "r": 1.0, "g": 0.4, "b": 0.0 }
+  },
+  {
+    "id": "shield_up",
+    "name": "Plasma Barrier",
+    "description": "Surrounds the chassis with a defensive electromagnetic energy shield.",
+    "duration": 6.0,
+    "modifiers": {
+      "damageReduction": 1.0,
+      "speedMult": 0.8
+    },
+    "particleColor": { "r": 0.0, "g": 0.8, "b": 1.0 }
+  },
+  {
+    "id": "corroded",
+    "name": "Acidic Decay",
+    "description": "Corrosive chemicals eat away at alloy structures. Speeds are debuffed.",
+    "duration": 4.0,
+    "modifiers": {
+      "damageOverTime": 15,
+      "speedMult": 0.65
+    },
+    "particleColor": { "r": 0.2, "g": 1.0, "b": 0.2 }
+  }
+]

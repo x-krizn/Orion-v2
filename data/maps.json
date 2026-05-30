@@ -1,0 +1,50 @@
+[
+  {
+    "id": "cyber_sector",
+    "name": "Cyber Grid Sector 4",
+    "theme": "cyber",
+    "arenaSize": 40,
+    "gridSpacing": 3,
+    "hasFloorReflection": true,
+    "skyboxBrightness": 0.5,
+    "initialDecoCount": 6,
+    "fogColor": { "r": 0.02, "g": 0.02, "b": 0.05 },
+    "groundColor": { "r": 0.05, "g": 0.07, "b": 0.12 }
+  },
+  {
+    "id": "magma_rift",
+    "name": "Ashen Magma Rift",
+    "theme": "magma",
+    "arenaSize": 50,
+    "gridSpacing": 4,
+    "hasFloorReflection": false,
+    "skyboxBrightness": 0.8,
+    "initialDecoCount": 10,
+    "fogColor": { "r": 0.12, "g": 0.03, "b": 0.01 },
+    "groundColor": { "r": 0.18, "g": 0.08, "b": 0.04 }
+  },
+  {
+    "id": "wasteland_dunes",
+    "name": "Scrapyard Wasteland Dunes",
+    "theme": "wasteland",
+    "arenaSize": 45,
+    "gridSpacing": 4,
+    "hasFloorReflection": false,
+    "skyboxBrightness": 1.0,
+    "initialDecoCount": 12,
+    "fogColor": { "r": 0.16, "g": 0.12, "b": 0.08 },
+    "groundColor": { "r": 0.22, "g": 0.18, "b": 0.13 }
+  },
+  {
+    "id": "matrix_construct",
+    "name": "Matrix Core Sandbox",
+    "theme": "matrix",
+    "arenaSize": 35,
+    "gridSpacing": 2,
+    "hasFloorReflection": true,
+    "skyboxBrightness": 0.3,
+    "initialDecoCount": 8,
+    "fogColor": { "r": 0.01, "g": 0.04, "b": 0.01 },
+    "groundColor": { "r": 0.02, "g": 0.06, "b": 0.02 }
+  }
+]

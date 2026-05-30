@@ -1,0 +1,42 @@
+[
+  {
+    "id": "plasma_emitter",
+    "name": "Plasma Emitter",
+    "description": "Discharges localized high-voltage plasma shockwaves in a 3D bubble.",
+    "damage": 50,
+    "cooldown": 1.0,
+    "range": 6,
+    "color": { "r": 0.0, "g": 0.94, "b": 1.0 },
+    "key": "L-CLICK",
+    "icon": "Crosshair",
+    "particleCount": 6,
+    "intensity": 0.8
+  },
+  {
+    "id": "heavy_railbeam",
+    "name": "Fusion Railbeam",
+    "description": "Pierces the target area with a highly intense thermal fusion beam sweep.",
+    "damage": 150,
+    "cooldown": 4.0,
+    "range": 25,
+    "color": { "r": 1.0, "g": 0.2, "b": 0.4 },
+    "key": "Q / 1",
+    "icon": "Zap",
+    "particleCount": 15,
+    "intensity": 1.2
+  },
+  {
+    "id": "tactical_bombardment",
+    "name": "Orbital Bombardment",
+    "description": "Calls down sequential tactical plasma-mortar strikes targeting the crosshair locator.",
+    "damage": 200,
+    "cooldown": 8.0,
+    "strikeCount": 4,
+    "spread": 5,
+    "color": { "r": 1.0, "g": 0.7, "b": 0.1 },
+    "key": "E / 2",
+    "icon": "Sparkles",
+    "particleCount": 10,
+    "intensity": 1.5
+  }
+]
