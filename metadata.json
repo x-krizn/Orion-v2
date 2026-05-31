@@ -1,6 +1,6 @@
 {
-  "name": "Mech Combat Sandbox",
-  "description": "A Babylon.js 7.x vertical-slice sandbox for a 2.5D mech combat game. Features customizable environment templates, procedural mechs, combat effects, virtual joystick controls, post-processing, and interactive debugging.",
+  "name": "Project: Orion",
+  "description": "A Babylon.js 2.5D mech combat game. Features customizable environment templates, procedural mechs, combat effects, virtual joystick controls, post-processing, and interactive debugging.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
