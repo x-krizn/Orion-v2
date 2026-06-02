@@ -27,6 +27,7 @@ import {
 import { GameManager } from "./game/game/GameManager";
 import { PerformanceStats, ModelAssetInfo } from "./game/types";
 import { SandboxConfigPanel } from "./components/SandboxConfigPanel";
+import { FXWorkbenchPanel } from "./components/FXWorkbenchPanel";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -121,6 +122,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"settings" | "effects" | "help" | "json" | "loadouts">("loadouts");
   const [showJoystick, setShowJoystick] = useState<boolean>(true);
   const [showTelemetry, setShowTelemetry] = useState<boolean>(true);
+  const [showFXWorkbench, setShowFXWorkbench] = useState<boolean>(false);
 
   // Dynamic loaded game database states
   const [weapons, setWeapons] = useState<any[]>([]);
@@ -431,6 +433,18 @@ export default function App() {
               >
                 <Activity className="w-2.5 h-2.5 animate-pulse text-orange-400" />
                 <span>Diagnostics: {showTelemetry ? "ON" : "OFF"}</span>
+              </button>
+              <button
+                id="fxWorkbenchToggleButton"
+                onClick={() => setShowFXWorkbench(!showFXWorkbench)}
+                className={`pointer-events-auto px-2 py-0.5 border text-white text-[9px] rounded font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer leading-none ${
+                  showFXWorkbench
+                    ? "bg-orange-500 hover:bg-orange-600 text-black font-semibold border-orange-500"
+                    : "bg-orange-500/15 hover:bg-orange-500/35 border-orange-500 hover:text-orange-200"
+                }`}
+              >
+                <Sliders className="w-2.5 h-2.5 text-orange-400" />
+                <span>FX Workbench</span>
               </button>
               {isInstallable && (
                 <button
@@ -1534,6 +1548,13 @@ export default function App() {
       <div className="absolute top-4 right-4 pointer-events-none text-[9px] font-mono text-slate-600 hidden lg:block z-3">
         SEC: DECK_STABILIZED // NO_DRIFT // REGISTRY: BK-77
       </div>
+
+      {showFXWorkbench && (
+        <FXWorkbenchPanel
+          gameManagerRef={gameManagerRef}
+          onClose={() => setShowFXWorkbench(false)}
+        />
+      )}
     </div>
   );
 }

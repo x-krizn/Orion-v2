@@ -44,6 +44,32 @@ interface ActiveTrailParticle {
   maxLife: number;
 }
 
+export interface CustomEffectData {
+  id: string;
+  name?: string;
+  type: string;
+  duration: number;
+  emitterSocket?: string;
+  color: string;
+  emissive?: boolean;
+  particleCount: number;
+  lifetime: number;
+  speed: number;
+  size: number;
+  spread: number;
+  gravity?: number;
+  blendMode?: string;
+}
+
+interface ActiveCustomParticle {
+  mesh: Mesh;
+  material: StandardMaterial;
+  velocity: Vector3;
+  gravity: number;
+  life: number;
+  maxLife: number;
+}
+
 export class FXSystem {
   private scene: Scene;
   private rootNode: TransformNode;
@@ -53,6 +79,16 @@ export class FXSystem {
   private beams: ActiveBeam[] = [];
   private fragments: ActiveExplosionFragment[] = [];
   private trails: ActiveTrailParticle[] = [];
+  private customParticles: ActiveCustomParticle[] = [];
+
+  // Effect Definitions Registry
+  private effectDefinitions: Map<string, CustomEffectData> = new Map();
+
+  // Preview System state
+  private activePreviewDefinition: CustomEffectData | null = null;
+  private previewTimeAccumulator = 0;
+  private previewIntervalTime = 0.5; // Seconds between repeat loops
+  private previewTargetNode: any = null;
 
   // Reusable materials
   private fireColor: Color3 = new Color3(0, 0.94, 1.0); // Cyan default
@@ -60,6 +96,7 @@ export class FXSystem {
   constructor(scene: Scene) {
     this.scene = scene;
     this.rootNode = new TransformNode("FXSystemRoot", this.scene);
+    this.loadEffectDefinitions();
   }
 
   /**
@@ -337,6 +374,202 @@ export class FXSystem {
         tail.material.alpha = progress * 0.8;
       }
     }
+
+    // 5. Process custom FX Workbench / JSON-driven particles
+    for (let i = this.customParticles.length - 1; i >= 0; i--) {
+      const p = this.customParticles[i];
+      p.life -= deltaTimeSeconds;
+
+      if (p.life <= 0) {
+        p.mesh.dispose();
+        this.customParticles.splice(i, 1);
+      } else {
+        // Pull down by custom mock gravity setting
+        p.velocity.y -= p.gravity * deltaTimeSeconds;
+        const step = p.velocity.scale(deltaTimeSeconds);
+        p.mesh.position.addInPlace(step);
+
+        const progress = p.life / p.maxLife;
+        p.mesh.scaling.setAll(progress);
+        p.material.alpha = progress;
+      }
+    }
+
+    // 6. Handle active live preview repetition/pulsing
+    if (this.activePreviewDefinition) {
+      this.previewTimeAccumulator += deltaTimeSeconds;
+      if (this.previewTimeAccumulator >= this.previewIntervalTime) {
+        this.previewTimeAccumulator = 0;
+        this.spawnCustomEffect(this.activePreviewDefinition, this.previewTargetNode);
+      }
+    }
+  }
+
+  /**
+   * Loads custom effect definitions from public effects.json dataset
+   */
+  public async loadEffectDefinitions(): Promise<void> {
+    try {
+      const response = await fetch("/data/effects.json");
+      if (response.ok) {
+        const list: CustomEffectData[] = await response.json();
+        list.forEach(item => {
+          this.effectDefinitions.set(item.id, item);
+        });
+        console.log(`[FXSystem]: Successfully loaded ${list.length} custom effects from static JSON.`);
+      } else {
+        throw new Error(`HTTP status ${response.status}`);
+      }
+    } catch (e) {
+      console.warn("[FXSystem]: Could not load custom effects from /data/effects.json, utilizing local fallback presets.", e);
+      // Stand-in declarative fallbacks
+      const fallbacks: CustomEffectData[] = [
+        {
+          id: "aether_muzzle_flash",
+          name: "Alpha-Aether Muzzle Pulse",
+          type: "particle",
+          duration: 0.25,
+          emitterSocket: "socket_muzzle",
+          color: "#7dfcff",
+          emissive: true,
+          particleCount: 60,
+          lifetime: 0.22,
+          speed: 9.5,
+          size: 0.20,
+          spread: 0.45,
+          gravity: 0.0,
+          blendMode: "additive"
+        }
+      ];
+      fallbacks.forEach(item => {
+        this.effectDefinitions.set(item.id, item);
+      });
+    }
+  }
+
+  /**
+   * Spawns a registered custom effect by ID on the given coordinates/node
+   */
+  public playEffect(effectId: string, positionOrSocket: Vector3 | TransformNode | Mesh | null): void {
+    const effect = this.effectDefinitions.get(effectId);
+    if (!effect) {
+      console.warn(`[FXSystem]: Effect definition not found for play request "${effectId}"`);
+      return;
+    }
+    this.spawnCustomEffect(effect, positionOrSocket);
+  }
+
+  /**
+   * Spawns a custom particle burst conforming to the declarative effect definition.
+   */
+  public spawnCustomEffect(effect: CustomEffectData, positionOrSocket: Vector3 | TransformNode | Mesh | null): void {
+    let origin = new Vector3(0, 1.0, 0); // Default fallback
+
+    if (positionOrSocket instanceof Vector3) {
+      origin = positionOrSocket;
+    } else if (positionOrSocket && (positionOrSocket as any).getAbsolutePosition) {
+      (positionOrSocket as any).computeWorldMatrix(true);
+      origin = (positionOrSocket as any).getAbsolutePosition();
+    }
+
+    const hexColor = effect.color || "#7dfcff";
+    const color = Color3.FromHexString(hexColor);
+
+    const count = effect.particleCount || 40;
+    const gVal = typeof effect.gravity === "number" ? effect.gravity : 0;
+    const sizeVal = effect.size || 0.15;
+    const speedVal = effect.speed || 6;
+    const lifetimeVal = effect.lifetime || 0.25;
+    const spreadVal = effect.spread || 0.50;
+
+    // Create a burst material
+    const fxMat = new StandardMaterial("customFXMat_" + effect.id + "_" + Date.now(), this.scene);
+    fxMat.emissiveColor = color;
+    fxMat.diffuseColor = color;
+    fxMat.disableLighting = !effect.emissive;
+    if (effect.blendMode === "additive") {
+      fxMat.alphaMode = 1; // Babylon additive blend alpha mode
+    }
+
+    for (let i = 0; i < count; i++) {
+      const pMesh = MeshBuilder.CreateBox("customFXParticle", { width: sizeVal, height: sizeVal, depth: sizeVal }, this.scene);
+      pMesh.position.copyFrom(origin);
+      pMesh.parent = this.rootNode;
+      pMesh.material = fxMat;
+
+      // Spherical trajectory logic using spread and speed
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos((Math.random() * 2 - 1) * spreadVal);
+      const rSpeed = speedVal * (0.5 + Math.random() * 1.0);
+
+      const vel = new Vector3(
+        Math.sin(phi) * Math.cos(theta) * rSpeed,
+        Math.cos(phi) * rSpeed,
+        Math.sin(phi) * Math.sin(theta) * rSpeed
+      );
+
+      this.customParticles.push({
+        mesh: pMesh,
+        material: fxMat,
+        velocity: vel,
+        gravity: gVal,
+        life: lifetimeVal * (0.6 + Math.random() * 0.8),
+        maxLife: lifetimeVal * 1.4
+      });
+    }
+  }
+
+  /**
+   * Registers a callback definition for real-time sandbox re-running in viewport
+   */
+  public previewEffect(effectDefinition: CustomEffectData, socketNode?: TransformNode | Mesh | null): void {
+    this.activePreviewDefinition = { ...effectDefinition };
+    this.previewTargetNode = socketNode || null;
+    this.previewTimeAccumulator = this.previewIntervalTime; // Triggers immediate initial blast
+    console.log(`[FXSystem]: Visualizer workbench preview active:`, effectDefinition.id);
+  }
+
+  /**
+   * Resets the active repetition preview loop
+   */
+  public restartPreview(): void {
+    if (this.activePreviewDefinition) {
+      this.previewTimeAccumulator = this.previewIntervalTime;
+    }
+  }
+
+  /**
+   * Stills the current visualizer repeat ticks
+   */
+  public stopPreview(): void {
+    this.activePreviewDefinition = null;
+    this.previewTargetNode = null;
+  }
+
+  /**
+   * Updates preview parameters instantly from slider updates
+   */
+  public updatePreviewParams(partialParams: Partial<CustomEffectData>): void {
+    if (this.activePreviewDefinition) {
+      this.activePreviewDefinition = {
+        ...this.activePreviewDefinition,
+        ...partialParams
+      };
+    }
+  }
+
+  /**
+   * Returns a copy of all loaded or default effect definitions
+   */
+  public getEffectDefinitionsList(): CustomEffectData[] {
+    return Array.from(this.effectDefinitions.values());
+  }
+
+  /**
+   * Retreive a specific custom effect metadata details
+   */
+  public getEffectDefinition(id: string): CustomEffectData | undefined {
+    return this.effectDefinitions.get(id);
   }
 
   /**
