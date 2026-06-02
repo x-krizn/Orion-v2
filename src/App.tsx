@@ -97,6 +97,20 @@ export default function App() {
   const [customPropsScale, setCustomPropsScale] = useState<number>(1.0);
   const [customPropsRotation, setCustomPropsRotation] = useState<number>(0);
   
+  // Precision alignment and customization settings (useful for Blockbench refining)
+  const [chassisOffsetX, setChassisOffsetX] = useState<number>(0);
+  const [chassisOffsetY, setChassisOffsetY] = useState<number>(0);
+  const [chassisOffsetZ, setChassisOffsetZ] = useState<number>(0);
+  const [muzzleOffsetX, setMuzzleOffsetX] = useState<number>(0);
+  const [muzzleOffsetY, setMuzzleOffsetY] = useState<number>(0);
+  const [muzzleOffsetZ, setMuzzleOffsetZ] = useState<number>(0);
+  const [bobbingHeight, setBobbingHeight] = useState<number>(0.08);
+  const [bobbingSpeed, setBobbingSpeed] = useState<number>(1.0);
+  const [tiltPitch, setTiltPitch] = useState<number>(0.12);
+  const [swayRoll, setSwayRoll] = useState<number>(0.04);
+  const [collisionRadius, setCollisionRadius] = useState<number>(0.7);
+  const [showAdvancedCalibration, setShowAdvancedCalibration] = useState<boolean>(false);
+  
   // Custom interactive controls state
   const [glowIntensity, setGlowIntensity] = useState<number>(0.85);
   const [bloomWeight, setBloomWeight] = useState<number>(0.5);
@@ -247,7 +261,50 @@ export default function App() {
     setCustomChassisRotation(180);
     setCustomPropsScale(1.0);
     setCustomPropsRotation(0);
+    
+    setChassisOffsetX(0);
+    setChassisOffsetY(0);
+    setChassisOffsetZ(0);
+    setMuzzleOffsetX(0);
+    setMuzzleOffsetY(0);
+    setMuzzleOffsetZ(0);
+    setBobbingHeight(0.08);
+    setBobbingSpeed(1.0);
+    setTiltPitch(0.12);
+    setSwayRoll(0.04);
+    setCollisionRadius(0.7);
   };
+
+  // Precision alignments update loop
+  useEffect(() => {
+    if (gameManagerRef.current) {
+      gameManagerRef.current.setCustomChassisAlignment({
+        offsetX: chassisOffsetX,
+        offsetY: chassisOffsetY,
+        offsetZ: chassisOffsetZ,
+        muzzleOffsetX: muzzleOffsetX,
+        muzzleOffsetY: muzzleOffsetY,
+        muzzleOffsetZ: muzzleOffsetZ,
+        bobbingHeight: bobbingHeight,
+        bobbingSpeed: bobbingSpeed,
+        tiltPitch: tiltPitch,
+        swayRoll: swayRoll,
+        collisionRadius: collisionRadius,
+      });
+    }
+  }, [
+    chassisOffsetX,
+    chassisOffsetY,
+    chassisOffsetZ,
+    muzzleOffsetX,
+    muzzleOffsetY,
+    muzzleOffsetZ,
+    bobbingHeight,
+    bobbingSpeed,
+    tiltPitch,
+    swayRoll,
+    collisionRadius,
+  ]);
 
   const handleAutoArrange = () => {
     gameManagerRef.current?.environment.autoArrangeLibrary();
@@ -923,6 +980,244 @@ export default function App() {
                   />
                 </div>
               </div>
+
+              {/* Collapsible Precision Callibration Subsections */}
+              <div className="pt-2 border-t border-white/5 space-y-2">
+                <button
+                  id="advancedToggleBtn"
+                  onClick={() => setShowAdvancedCalibration(!showAdvancedCalibration)}
+                  className="w-full flex items-center justify-between text-[10px] font-mono font-bold text-orange-400 uppercase tracking-widest hover:text-orange-200 transition-colors cursor-pointer text-left"
+                >
+                  <span className="flex items-center space-x-1">
+                    <Sparkles className="w-3 h-3 text-orange-400 animate-pulse" />
+                    <span>{showAdvancedCalibration ? "HIDE ADVANCED RIG OFFSETS" : "SHOW ADVANCED RIG OFFSETS"}</span>
+                  </span>
+                  <span className="text-[9px] text-[#d1d1d6]/50 font-bold bg-white/5 px-1.5 py-0.5 rounded">
+                    {showAdvancedCalibration ? "CLOSE" : "EXPAND"}
+                  </span>
+                </button>
+
+                {showAdvancedCalibration && (
+                  <div className="space-y-4 pt-2.5 animate-fadeIn font-mono text-[9px] text-[#d1d1d6]/80 leading-relaxed border-t border-white/5">
+                    
+                    {/* Pivot Coordinate Shifts */}
+                    <div className="space-y-2">
+                      <span className="text-[9px] font-bold text-orange-400 block uppercase border-b border-white/5 pb-0.5">
+                        BLOCKBENCH ENTRANCE PIVOT SHIFTS
+                      </span>
+                      
+                      <div>
+                        <div className="flex justify-between">
+                          <span>PIVOT OFFSET X (CHEST SHIFT):</span>
+                          <span className="text-[#d1d1d6] font-bold">{chassisOffsetX.toFixed(2)} units</span>
+                        </div>
+                        <input
+                          id="pivotXSlider"
+                          type="range"
+                          min="-2.0"
+                          max="2.0"
+                          step="0.05"
+                          value={chassisOffsetX}
+                          onChange={(e) => setChassisOffsetX(parseFloat(e.target.value))}
+                          className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between">
+                          <span>PIVOT OFFSET Y (HEIGHT ADJUST):</span>
+                          <span className="text-[#d1d1d6] font-bold">{chassisOffsetY.toFixed(2)} units</span>
+                        </div>
+                        <input
+                          id="pivotYSlider"
+                          type="range"
+                          min="-2.0"
+                          max="2.0"
+                          step="0.05"
+                          value={chassisOffsetY}
+                          onChange={(e) => setChassisOffsetY(parseFloat(e.target.value))}
+                          className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between">
+                          <span>PIVOT OFFSET Z (DEPTH ALIGN):</span>
+                          <span className="text-[#d1d1d6] font-bold">{chassisOffsetZ.toFixed(2)} units</span>
+                        </div>
+                        <input
+                          id="pivotZSlider"
+                          type="range"
+                          min="-2.0"
+                          max="2.0"
+                          step="0.05"
+                          value={chassisOffsetZ}
+                          onChange={(e) => setChassisOffsetZ(parseFloat(e.target.value))}
+                          className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Firing Nozzle Adjustments */}
+                    <div className="space-y-2">
+                      <span className="text-[9px] font-bold text-orange-400 block uppercase border-b border-white/5 pb-0.5">
+                        WEAPON FIRE POINT COORDINATES
+                      </span>
+
+                      <div>
+                        <div className="flex justify-between">
+                          <span>BARREL WIDTH EXPANSION (X):</span>
+                          <span className="text-[#d1d1d6] font-bold">{muzzleOffsetX.toFixed(2)} (width offset)</span>
+                        </div>
+                        <input
+                          id="muzzleXSlider"
+                          type="range"
+                          min="-2.0"
+                          max="3.0"
+                          step="0.05"
+                          value={muzzleOffsetX}
+                          onChange={(e) => setMuzzleOffsetX(parseFloat(e.target.value))}
+                          className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between">
+                          <span>BARREL HEIGHT DISPLACEMENT (Y):</span>
+                          <span className="text-[#d1d1d6] font-bold">{muzzleOffsetY.toFixed(2)} (height offset)</span>
+                        </div>
+                        <input
+                          id="muzzleYSlider"
+                          type="range"
+                          min="-2.0"
+                          max="3.0"
+                          step="0.05"
+                          value={muzzleOffsetY}
+                          onChange={(e) => setMuzzleOffsetY(parseFloat(e.target.value))}
+                          className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between">
+                          <span>BARREL NOZZLE PROJECTION (Z):</span>
+                          <span className="text-[#d1d1d6] font-bold">{muzzleOffsetZ.toFixed(2)} (outfield projection)</span>
+                        </div>
+                        <input
+                          id="muzzleZSlider"
+                          type="range"
+                          min="-1.5"
+                          max="4.0"
+                          step="0.05"
+                          value={muzzleOffsetZ}
+                          onChange={(e) => setMuzzleOffsetZ(parseFloat(e.target.value))}
+                          className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Floating Bobbing Wave and Speed */}
+                    <div className="space-y-2">
+                      <span className="text-[9px] font-bold text-orange-400 block uppercase border-b border-white/5 pb-0.5">
+                        LIVE PULSE ANIMATIONS & MOTION TILT
+                      </span>
+
+                      <div>
+                        <div className="flex justify-between">
+                          <span>BOBBING AMPLITUDE (Y-HEIGHT CHOP):</span>
+                          <span className="text-[#d1d1d6] font-bold">{bobbingHeight.toFixed(3)} units</span>
+                        </div>
+                        <input
+                          id="bobHeightSlider"
+                          type="range"
+                          min="0.0"
+                          max="0.5"
+                          step="0.01"
+                          value={bobbingHeight}
+                          onChange={(e) => setBobbingHeight(parseFloat(e.target.value))}
+                          className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between">
+                          <span>BOBBING ENGINE SPIN SPEED:</span>
+                          <span className="text-[#d1d1d6] font-bold">{bobbingSpeed.toFixed(2)}x rate</span>
+                        </div>
+                        <input
+                          id="bobSpeedSlider"
+                          type="range"
+                          min="0.0"
+                          max="4.0"
+                          step="0.1"
+                          value={bobbingSpeed}
+                          onChange={(e) => setBobbingSpeed(parseFloat(e.target.value))}
+                          className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between">
+                          <span>WALK PITCH TILT BIAS:</span>
+                          <span className="text-[#d1d1d6] font-bold">{tiltPitch.toFixed(2)} pitch rads</span>
+                        </div>
+                        <input
+                          id="tiltPitchSlider"
+                          type="range"
+                          min="0.0"
+                          max="0.6"
+                          step="0.02"
+                          value={tiltPitch}
+                          onChange={(e) => setTiltPitch(parseFloat(e.target.value))}
+                          className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between">
+                          <span>SIDE-SWAY WALKING SWING (ROLL):</span>
+                          <span className="text-[#d1d1d6] font-bold">{swayRoll.toFixed(3)} sway rads</span>
+                        </div>
+                        <input
+                          id="swayRollSlider"
+                          type="range"
+                          min="0.0"
+                          max="0.2"
+                          step="0.01"
+                          value={swayRoll}
+                          onChange={(e) => setSwayRoll(parseFloat(e.target.value))}
+                          className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Capsule Boundaries */}
+                    <div className="space-y-2">
+                      <span className="text-[9px] font-bold text-orange-400 block uppercase border-b border-white/5 pb-0.5">
+                        RIG PHYSICAL SLIDDING COLLISION
+                      </span>
+
+                      <div>
+                        <div className="flex justify-between">
+                          <span>RIG HITBOX RADIUS COEF:</span>
+                          <span className="text-[#d1d1d6] font-bold">{collisionRadius.toFixed(2)} radius units</span>
+                        </div>
+                        <input
+                          id="colRadiusSlider"
+                          type="range"
+                          min="0.1"
+                          max="2.5"
+                          step="0.05"
+                          value={collisionRadius}
+                          onChange={(e) => setCollisionRadius(parseFloat(e.target.value))}
+                          className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                        />
+                      </div>
+                    </div>
+
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Custom Modular Asset Library */}
@@ -1167,6 +1462,17 @@ export default function App() {
             customChassisRotation={customChassisRotation}
             customPropsScale={customPropsScale}
             customPropsRotation={customPropsRotation}
+            chassisOffsetX={chassisOffsetX}
+            chassisOffsetY={chassisOffsetY}
+            chassisOffsetZ={chassisOffsetZ}
+            muzzleOffsetX={muzzleOffsetX}
+            muzzleOffsetY={muzzleOffsetY}
+            muzzleOffsetZ={muzzleOffsetZ}
+            bobbingHeight={bobbingHeight}
+            bobbingSpeed={bobbingSpeed}
+            tiltPitch={tiltPitch}
+            swayRoll={swayRoll}
+            collisionRadius={collisionRadius}
             gameManagerRef={gameManagerRef}
             handleThemeChange={handleThemeChange}
             handleGlowIntensityChange={handleGlowIntensityChange}
@@ -1179,6 +1485,17 @@ export default function App() {
             handleCustomChassisRotationChange={handleCustomChassisRotationChange}
             handleCustomPropsScaleChange={handleCustomPropsScaleChange}
             handleCustomPropsRotationChange={handleCustomPropsRotationChange}
+            handleChassisOffsetXChange={setChassisOffsetX}
+            handleChassisOffsetYChange={setChassisOffsetY}
+            handleChassisOffsetZChange={setChassisOffsetZ}
+            handleMuzzleOffsetXChange={setMuzzleOffsetX}
+            handleMuzzleOffsetYChange={setMuzzleOffsetY}
+            handleMuzzleOffsetZChange={setMuzzleOffsetZ}
+            handleBobbingHeightChange={setBobbingHeight}
+            handleBobbingSpeedChange={setBobbingSpeed}
+            handleTiltPitchChange={setTiltPitch}
+            handleSwayRollChange={setSwayRoll}
+            handleCollisionRadiusChange={setCollisionRadius}
           />
         )}
 

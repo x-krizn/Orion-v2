@@ -81,6 +81,7 @@ export class GameManager {
 
   // Drag and drop routing setting
   public dndMode: "character" | "environment" = "environment";
+  private isDisposed = false;
   
   // Placement coordination states
   public selectedLibraryItemId: string | null = null;
@@ -171,6 +172,9 @@ export class GameManager {
       this.settings.movement,
       this.settings.rendering.environment.arenaSize
     );
+    this.player.onThemeColorDetected = (color) => {
+      this.fx.setThemeColors(color);
+    };
 
     // Feed player shadow triggers
     const shadowGenerator = this.environment.getShadowGenerator();
@@ -594,6 +598,15 @@ export class GameManager {
   }
 
   /**
+   * Propagate fine visual alignments for custom character models
+   */
+  public setCustomChassisAlignment(settings: any): void {
+    if (this.player) {
+      this.player.setCustomAlignment(settings);
+    }
+  }
+
+  /**
    * Propagate custom props scale and rotation to environment manager
    */
   public setCustomPropsTransforms(scale: number, rotationDeg: number): void {
@@ -695,8 +708,10 @@ export class GameManager {
    * Helper to verify if a path actually has a valid GLB before loading it
    */
   private async verifyGLBPath(url: string): Promise<boolean> {
+    if (this.isDisposed || (this.scene && this.scene.isDisposed)) return false;
     try {
       const response = await fetch(url);
+      if (this.isDisposed || (this.scene && this.scene.isDisposed)) return false;
       if (!response.ok) return false;
       
       const contentType = response.headers.get("content-type") || "";
@@ -705,6 +720,7 @@ export class GameManager {
       }
       
       const buf = await response.arrayBuffer();
+      if (this.isDisposed || (this.scene && this.scene.isDisposed)) return false;
       if (buf.byteLength < 4) return false;
       
       const view = new DataView(buf);
@@ -722,6 +738,8 @@ export class GameManager {
    * Automatically preload user uploaded custom models if they exist in the workspace assets paths
    */
   public async preloadDefaultAssets(): Promise<void> {
+    if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
+
     // 1. Try preloading the player character model
     const warriorPaths = [
       "./assets/models/mechs/warriorTest.glb",
@@ -731,9 +749,11 @@ export class GameManager {
     
     let loadedWarrior = false;
     for (const path of warriorPaths) {
+      if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
       try {
         console.log(`[Preloader]: Verifying custom mech warriorTest.glb at ${path}...`);
         const isValid = await this.verifyGLBPath(path);
+        if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
         if (!isValid) {
           console.log(`[Preloader]: Path ${path} does not contain a valid GLB asset. Skipping...`);
           continue;
@@ -741,6 +761,7 @@ export class GameManager {
 
         console.log(`[Preloader]: Path verified! Attempting to load user custom mech warriorTest.glb via ${path}...`);
         const results = await SceneLoader.ImportMeshAsync("", "", path, this.scene, undefined, ".glb");
+        if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
         const modelRoot = results.meshes[0];
         
         this.player.attachCustomModel(modelRoot);
@@ -757,10 +778,12 @@ export class GameManager {
         loadedWarrior = true;
         break; // Stop on first success
       } catch (e) {
-        console.warn(`[Preloader]: Path ${path} unsuccessful for warriorTest.glb:`, e);
+        if (!this.isDisposed && this.scene && !this.scene.isDisposed) {
+          console.warn(`[Preloader]: Path ${path} unsuccessful for warriorTest.glb:`, e);
+        }
       }
     }
-    if (!loadedWarrior) {
+    if (!loadedWarrior && !this.isDisposed && this.scene && !this.scene.isDisposed) {
       console.log("[Preloader]: Custom warriorTest.glb is not present on workspace or could not load on any path, using procedural model.");
     }
 
@@ -773,9 +796,11 @@ export class GameManager {
     
     let loadedEnviro = false;
     for (const path of enviroPaths) {
+      if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
       try {
         console.log(`[Preloader]: Verifying custom environment enviroTest.glb at ${path}...`);
         const isValid = await this.verifyGLBPath(path);
+        if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
         if (!isValid) {
           console.log(`[Preloader]: Path ${path} does not contain a valid GLB asset. Skipping...`);
           continue;
@@ -783,14 +808,17 @@ export class GameManager {
 
         console.log(`[Preloader]: Path verified! Attempting to load user custom environment enviroTest.glb via ${path}...`);
         await this.environment.preloadEnviroModelFromURL(path);
+        if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
         console.log(`[Preloader]: Successfully preloaded custom environment enviroTest.glb via ${path}!`);
         loadedEnviro = true;
         break; // Stop on first success
       } catch (e) {
-        console.warn(`[Preloader]: Path ${path} unsuccessful for enviroTest.glb:`, e);
+        if (!this.isDisposed && this.scene && !this.scene.isDisposed) {
+          console.warn(`[Preloader]: Path ${path} unsuccessful for enviroTest.glb:`, e);
+        }
       }
     }
-    if (!loadedEnviro) {
+    if (!loadedEnviro && !this.isDisposed && this.scene && !this.scene.isDisposed) {
       console.log("[Preloader]: Custom enviroTest.glb is not present on workspace or could not load on any path, using default grid layout.");
     }
   }
@@ -811,7 +839,7 @@ export class GameManager {
     const playerInputState = this.input.getInputState();
 
     // Update Player & follow camera
-    this.player.update(deltaTimeSeconds, playerInputState, this.fx);
+    this.player.update(deltaTimeSeconds, playerInputState, this.fx, this.environment.getObstacles());
     this.cameraSystem.setTarget(this.player.getPosition());
     this.cameraSystem.update(deltaTimeSeconds);
 
@@ -921,6 +949,7 @@ export class GameManager {
    * Clean up assets
    */
   public dispose(): void {
+    this.isDisposed = true;
     this.fx.clearAll();
     this.environment.clearCustomAssets();
     this.glowLayer?.dispose();

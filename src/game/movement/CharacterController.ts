@@ -33,7 +33,11 @@ export class CharacterController {
   private customEyeGlowMeshes: Mesh[] = [];
   private customBoosterMeshes: Mesh[] = [];
   private customDashBoosterMeshes: Mesh[] = [];
+  private customLeftGunArm: Mesh | null = null;
+  private customRightGunArm: Mesh | null = null;
   private activeThemeColor: Color3 = new Color3(0, 0.94, 1.0); // Defaults to cyber cyan
+
+  public onThemeColorDetected?: (color: Color3) => void;
 
   // Track original properties of custom imported character mesh to allow rotation/scaling overrides safely
   private originalBaseScale = new Vector3(1, 1, 1);
@@ -44,6 +48,19 @@ export class CharacterController {
   
   public customScaleMultiplier = 1.0;
   public customRotationYOffset = 0.0;
+
+  // Precision alignment and customization settings (useful for Blockbench refining)
+  private customOffsetX = 0;
+  private customOffsetY = 0;
+  private customOffsetZ = 0;
+  private customMuzzleOffsetX = 0;
+  private customMuzzleOffsetY = 0;
+  private customMuzzleOffsetZ = 0;
+  private customBobbingHeight = 0.08;
+  private customBobbingSpeed = 1.0;
+  private customTiltPitch = 0.12;
+  private customSwayRoll = 0.04;
+  private customCollisionRadius = 0.7;
 
   // Visual sub-meshes for flashing
   private flashMeshes: Mesh[] = [];
@@ -306,6 +323,32 @@ export class CharacterController {
     this.customEyeGlowMeshes = [];
     this.customBoosterMeshes = [];
     this.customDashBoosterMeshes = [];
+    this.customLeftGunArm = null;
+    this.customRightGunArm = null;
+
+    // Detect character theme color from model's emissive features (e.g. eyes/glow/visors)
+    let detectedThemeColor: Color3 | null = null;
+    node.getChildMeshes().forEach(mesh => {
+      const mat = mesh.material as StandardMaterial;
+      if (mat) {
+        const meshName = mesh.name.toLowerCase();
+        if (meshName.includes("glow") || meshName.includes("visor") || meshName.includes("eye") || meshName.includes("booster")) {
+          if (mat.emissiveColor && (mat.emissiveColor.r > 0.05 || mat.emissiveColor.g > 0.05 || mat.emissiveColor.b > 0.05)) {
+            detectedThemeColor = mat.emissiveColor.clone();
+          } else if (mat.diffuseColor && (mat.diffuseColor.r > 0.05 || mat.diffuseColor.g > 0.05 || mat.diffuseColor.b > 0.05)) {
+            detectedThemeColor = mat.diffuseColor.clone();
+          }
+        }
+      }
+    });
+
+    if (detectedThemeColor) {
+      console.log(`[Asset Integration]: Detected custom theme color from model:`, (detectedThemeColor as Color3).toHexString());
+      this.activeThemeColor = detectedThemeColor;
+      if (this.onThemeColorDetected) {
+        this.onThemeColorDetected(detectedThemeColor);
+      }
+    }
 
     // Register shadow casting for all sub-meshes of this imported asset
     const shadowGenerators = this.scene.lights
@@ -317,6 +360,13 @@ export class CharacterController {
 
       const meshName = mesh.name.toLowerCase();
       let isSpecialMesh = false;
+
+      // Scan for weapon/arm/gun components based on naming
+      if (meshName.includes("left") && (meshName.includes("gun") || meshName.includes("arm") || meshName.includes("weapon") || meshName.includes("barrel") || meshName.includes("muzzle") || meshName.includes("cannon") || meshName.includes("laser") || meshName.includes("shooter"))) {
+        this.customLeftGunArm = mesh as Mesh;
+      } else if (meshName.includes("right") && (meshName.includes("gun") || meshName.includes("arm") || meshName.includes("weapon") || meshName.includes("barrel") || meshName.includes("muzzle") || meshName.includes("cannon") || meshName.includes("laser") || meshName.includes("shooter"))) {
+        this.customRightGunArm = mesh as Mesh;
+      }
 
       if (meshName.includes("eyeglow") || (meshName.includes("eye") && meshName.includes("glow"))) {
         this.customEyeGlowMeshes.push(mesh as Mesh);
@@ -347,6 +397,23 @@ export class CharacterController {
         sg.addShadowCaster(mesh);
       });
     });
+
+    // Fallback search by relative side-coordinates if some arm meshes were found without left/right naming
+    if (!this.customLeftGunArm || !this.customRightGunArm) {
+      node.getChildMeshes().forEach(mesh => {
+        const meshName = mesh.name.toLowerCase();
+        if (meshName.includes("gun") || meshName.includes("weapon") || meshName.includes("barrel") || meshName.includes("muzzle") || meshName.includes("cannon") || meshName.includes("laser") || meshName.includes("shooter")) {
+          mesh.computeWorldMatrix(true);
+          // Get local position relative to the main chassis
+          const localPos = Vector3.TransformCoordinates(mesh.getAbsolutePosition(), node.getWorldMatrix().clone().invert());
+          if (localPos.x < -0.15) {
+            if (!this.customLeftGunArm) this.customLeftGunArm = mesh as Mesh;
+          } else if (localPos.x > 0.15) {
+            if (!this.customRightGunArm) this.customRightGunArm = mesh as Mesh;
+          }
+        }
+      });
+    }
   }
 
   /**
@@ -355,8 +422,12 @@ export class CharacterController {
   public applyCustomModelTransforms(): void {
     if (!this.customModelNode) return;
 
-    // Apply computed ground offset
-    this.customModelNode.position.copyFrom(this.baseOffsetPos);
+    // Apply computed ground offset + manual coordinate shifts
+    this.customModelNode.position.set(
+      this.baseOffsetPos.x + this.customOffsetX,
+      this.baseOffsetPos.y + this.customOffsetY,
+      this.baseOffsetPos.z + this.customOffsetZ
+    );
 
     // Apply combined scale
     const finalFactor = this.autoScaleFactor * this.customScaleMultiplier;
@@ -382,6 +453,37 @@ export class CharacterController {
   public setCustomTransforms(scaleMultiplier: number, rotationDeg: number): void {
     this.customScaleMultiplier = scaleMultiplier;
     this.customRotationYOffset = rotationDeg * (Math.PI / 180);
+    this.applyCustomModelTransforms();
+  }
+
+  /**
+   * Set extensive precision alignment parameters for custom imported models
+   */
+  public setCustomAlignment(settings: {
+    offsetX?: number;
+    offsetY?: number;
+    offsetZ?: number;
+    muzzleOffsetX?: number;
+    muzzleOffsetY?: number;
+    muzzleOffsetZ?: number;
+    bobbingHeight?: number;
+    bobbingSpeed?: number;
+    tiltPitch?: number;
+    swayRoll?: number;
+    collisionRadius?: number;
+  }): void {
+    if (settings.offsetX !== undefined) this.customOffsetX = settings.offsetX;
+    if (settings.offsetY !== undefined) this.customOffsetY = settings.offsetY;
+    if (settings.offsetZ !== undefined) this.customOffsetZ = settings.offsetZ;
+    if (settings.muzzleOffsetX !== undefined) this.customMuzzleOffsetX = settings.muzzleOffsetX;
+    if (settings.muzzleOffsetY !== undefined) this.customMuzzleOffsetY = settings.muzzleOffsetY;
+    if (settings.muzzleOffsetZ !== undefined) this.customMuzzleOffsetZ = settings.muzzleOffsetZ;
+    if (settings.bobbingHeight !== undefined) this.customBobbingHeight = settings.bobbingHeight;
+    if (settings.bobbingSpeed !== undefined) this.customBobbingSpeed = settings.bobbingSpeed;
+    if (settings.tiltPitch !== undefined) this.customTiltPitch = settings.tiltPitch;
+    if (settings.swayRoll !== undefined) this.customSwayRoll = settings.swayRoll;
+    if (settings.collisionRadius !== undefined) this.customCollisionRadius = settings.collisionRadius;
+
     this.applyCustomModelTransforms();
   }
 
@@ -416,6 +518,32 @@ export class CharacterController {
    */
   public getMuzzlePointAndAlt(): Vector3 {
     this.activeArmToggle = !this.activeArmToggle;
+    
+    if (this.customModelNode) {
+      const activeCustomArm = this.activeArmToggle ? this.customRightGunArm : this.customLeftGunArm;
+      if (activeCustomArm) {
+        // If we have custom arms detected, use its world matrix with a slight forward offset!
+        const bounds = activeCustomArm.getHierarchyBoundingVectors(true);
+        const center = bounds.max.add(bounds.min).scale(0.5);
+        // Offset slightly forward on Z dimension (local forward) based on mesh bounding size + custom coordinate offset
+        const localMuzzle = new Vector3(
+          this.customMuzzleOffsetX * (this.activeArmToggle ? 1 : -1), 
+          this.customMuzzleOffsetY, 
+          ((bounds.max.z - center.z) || 0.6) + this.customMuzzleOffsetZ
+        );
+        return Vector3.TransformCoordinates(localMuzzle, activeCustomArm.getWorldMatrix());
+      } else {
+        // High fidelity fallback: calculate left/right arm offsets dynamically by the custom model size
+        const bounds = this.customModelNode.getHierarchyBoundingVectors(true);
+        const halfWidth = (bounds.max.x - bounds.min.x) * 0.4 || 0.7;
+        const height = (bounds.max.y + bounds.min.y) * 0.55 || 1.25;
+        const sideOffset = (this.activeArmToggle ? halfWidth : -halfWidth) + (this.customMuzzleOffsetX * (this.activeArmToggle ? 1 : -1));
+        // Position firing vector slightly forward in local root coordinates
+        const localMuzzle = new Vector3(sideOffset, height + this.customMuzzleOffsetY, 0.9 + this.customMuzzleOffsetZ);
+        return Vector3.TransformCoordinates(localMuzzle, this.rootNode.getWorldMatrix());
+      }
+    }
+
     const gunArm = this.activeArmToggle ? this.rightGunArm : this.leftGunArm;
     
     // Calculate global position of arm barrel
@@ -455,7 +583,7 @@ export class CharacterController {
   /**
    * Physical loop computation. Takes raw inputs and computes responsive, snapping movement
    */
-  public update(deltaTimeSeconds: number, input: PlayerInput, fx?: FXSystem): void {
+  public update(deltaTimeSeconds: number, input: PlayerInput, fx?: FXSystem, obstacles?: Mesh[]): void {
     // 1. Process cooldown timers
     if (this.dashCooldownTimer > 0) {
       this.dashCooldownTimer -= deltaTimeSeconds;
@@ -527,6 +655,64 @@ export class CharacterController {
     const movementDelta = this.velocity.scale(deltaTimeSeconds);
     this.rootNode.position.addInPlace(movementDelta);
 
+    // High fidelity sliding collision detection and resolution against physical obstacles
+    if (obstacles && obstacles.length > 0) {
+      // Scale collision radius to fit the custom mech visual chassis if loaded
+      const playerRadius = this.customModelNode ? this.customCollisionRadius : 0.7; 
+      const playerPos = this.rootNode.position;
+
+      for (const obstacle of obstacles) {
+        if (!obstacle || obstacle.isDisposed() || !obstacle.isEnabled()) continue;
+
+        // Fast distance squared pre-filtering (ignore distant obstacles to maximize performance)
+        const dx = obstacle.position.x - playerPos.x;
+        const dz = obstacle.position.z - playerPos.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq > 15.0) continue; // Skip distant boxes immediately
+
+        const boundingInfo = obstacle.getBoundingInfo();
+        const bbox = boundingInfo.boundingBox;
+        const min = bbox.minimumWorld;
+        const max = bbox.maximumWorld;
+
+        // Overlap limits for collision axes
+        const playerMinX = playerPos.x - playerRadius;
+        const playerMaxX = playerPos.x + playerRadius;
+        const playerMinZ = playerPos.z - playerRadius;
+        const playerMaxZ = playerPos.z + playerRadius;
+
+        // Intersection check on all three dimensions (AABB Intersection)
+        if (playerMaxX > min.x && playerMinX < max.x &&
+            playerMaxZ > min.z && playerMinZ < max.z &&
+            playerPos.y + 2.0 > min.y && playerPos.y < max.y) {
+          
+          // Calculate overlap penetration counts on X and Z axes
+          const overlapX1 = playerMaxX - min.x; // penetration pushing left
+          const overlapX2 = max.x - playerMinX; // penetration pushing right
+          const overlapZ1 = playerMaxZ - min.z; // penetration pushing backward
+          const overlapZ2 = max.z - playerMinZ; // penetration pushing forward
+
+          const minOverlapX = Math.min(overlapX1, overlapX2);
+          const minOverlapZ = Math.min(overlapZ1, overlapZ2);
+
+          // Resolve collision along the axis of shallowest penetration depth (creates smooth sliding!)
+          if (minOverlapX < minOverlapZ) {
+            if (overlapX1 < overlapX2) {
+              playerPos.x -= overlapX1;
+            } else {
+              playerPos.x += overlapX2;
+            }
+          } else {
+            if (overlapZ1 < overlapZ2) {
+              playerPos.z -= overlapZ1;
+            } else {
+              playerPos.z += overlapZ2;
+            }
+          }
+        }
+      }
+    }
+
     // Enforce strict map bounds limit to avoid flying outside
     this.rootNode.position.x = Math.max(-this.boundsSize, Math.min(this.boundsSize, this.rootNode.position.x));
     this.rootNode.position.z = Math.max(-this.boundsSize, Math.min(this.boundsSize, this.rootNode.position.z));
@@ -546,6 +732,45 @@ export class CharacterController {
       this.currentRotation += Math.max(-rotStep, Math.min(rotStep, wrappedDiff));
       
       this.rootNode.rotation.y = this.currentRotation;
+    }
+
+    // Add high-fidelity dynamic floating bobbing and tilting animations for custom mech models
+    if (this.customModelNode) {
+      // Hovering bobbing float on y-axis (adds beautiful metallic floating feeling)
+      const bobbingFactor = Math.sin(this.pulseTimer * this.customBobbingSpeed) * this.customBobbingHeight; 
+      
+      // Pitch/roll tilting when moving
+      let tiltPitch = 0;
+      let tiltRoll = 0;
+      const isMoving = input.moveDirection.length() > 0;
+      if (isMoving) {
+        // Tilt slightly forward in movement direction (relative to localized facing)
+        tiltPitch = this.customTiltPitch;
+        // Subtle swaying roll oscillation
+        tiltRoll = Math.sin(this.pulseTimer * 1.5 * this.customBobbingSpeed) * this.customSwayRoll;
+      } else if (this.isDashing) {
+        // High speed forward tilt
+        tiltPitch = this.customTiltPitch * 2.0;
+      }
+      
+      // Position includes the baseline height offset + custom offset + dynamic vertical float
+      this.customModelNode.position.set(
+        this.baseOffsetPos.x + this.customOffsetX,
+        this.baseOffsetPos.y + this.customOffsetY + bobbingFactor,
+        this.baseOffsetPos.z + this.customOffsetZ
+      );
+      
+      // Rotation combining the custom Y offset + yaw sway + pitch tilt
+      if (this.originalBaseQuaternion) {
+        const extraRot = Quaternion.RotationYawPitchRoll(this.customRotationYOffset + tiltRoll, tiltPitch, 0);
+        this.customModelNode.rotationQuaternion = this.originalBaseQuaternion.multiply(extraRot);
+      } else {
+        this.customModelNode.rotation.set(
+          this.originalBaseRotation.x + tiltPitch,
+          this.originalBaseRotation.y + this.customRotationYOffset + tiltRoll,
+          this.originalBaseRotation.z
+        );
+      }
     }
 
     // 5. Emit active engine booster trails and toggle custom model booster visibilities

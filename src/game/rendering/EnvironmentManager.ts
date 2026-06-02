@@ -682,7 +682,9 @@ export class EnvironmentManager {
       this.autoArrangeLibrary();
 
     } catch (e) {
-      console.error("Failed to preload enviroTest.glb", e);
+      if (this.scene && !this.scene.isDisposed) {
+        console.error("Failed to preload enviroTest.glb", e);
+      }
     }
   }
 

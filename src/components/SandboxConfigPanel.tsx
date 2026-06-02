@@ -14,6 +14,17 @@ interface SandboxConfigPanelProps {
   customChassisRotation: number;
   customPropsScale: number;
   customPropsRotation: number;
+  chassisOffsetX: number;
+  chassisOffsetY: number;
+  chassisOffsetZ: number;
+  muzzleOffsetX: number;
+  muzzleOffsetY: number;
+  muzzleOffsetZ: number;
+  bobbingHeight: number;
+  bobbingSpeed: number;
+  tiltPitch: number;
+  swayRoll: number;
+  collisionRadius: number;
   gameManagerRef: React.MutableRefObject<any>;
   handleThemeChange: (theme: any) => void;
   handleGlowIntensityChange: (val: number) => void;
@@ -26,6 +37,17 @@ interface SandboxConfigPanelProps {
   handleCustomChassisRotationChange: (val: number) => void;
   handleCustomPropsScaleChange: (val: number) => void;
   handleCustomPropsRotationChange: (val: number) => void;
+  handleChassisOffsetXChange: (val: number) => void;
+  handleChassisOffsetYChange: (val: number) => void;
+  handleChassisOffsetZChange: (val: number) => void;
+  handleMuzzleOffsetXChange: (val: number) => void;
+  handleMuzzleOffsetYChange: (val: number) => void;
+  handleMuzzleOffsetZChange: (val: number) => void;
+  handleBobbingHeightChange: (val: number) => void;
+  handleBobbingSpeedChange: (val: number) => void;
+  handleTiltPitchChange: (val: number) => void;
+  handleSwayRollChange: (val: number) => void;
+  handleCollisionRadiusChange: (val: number) => void;
 }
 
 export function SandboxConfigPanel({
@@ -40,6 +62,17 @@ export function SandboxConfigPanel({
   customChassisRotation,
   customPropsScale,
   customPropsRotation,
+  chassisOffsetX,
+  chassisOffsetY,
+  chassisOffsetZ,
+  muzzleOffsetX,
+  muzzleOffsetY,
+  muzzleOffsetZ,
+  bobbingHeight,
+  bobbingSpeed,
+  tiltPitch,
+  swayRoll,
+  collisionRadius,
   gameManagerRef,
   handleThemeChange,
   handleGlowIntensityChange,
@@ -52,6 +85,17 @@ export function SandboxConfigPanel({
   handleCustomChassisRotationChange,
   handleCustomPropsScaleChange,
   handleCustomPropsRotationChange,
+  handleChassisOffsetXChange,
+  handleChassisOffsetYChange,
+  handleChassisOffsetZChange,
+  handleMuzzleOffsetXChange,
+  handleMuzzleOffsetYChange,
+  handleMuzzleOffsetZChange,
+  handleBobbingHeightChange,
+  handleBobbingSpeedChange,
+  handleTiltPitchChange,
+  handleSwayRollChange,
+  handleCollisionRadiusChange,
 }: SandboxConfigPanelProps) {
   const [jsonString, setJsonString] = useState("");
   const [copied, setCopied] = useState(false);
@@ -103,6 +147,25 @@ export function SandboxConfigPanel({
       chassisOverrides: {
         scale: Number(customChassisScale.toFixed(2)),
         rotation: customChassisRotation,
+        offset: {
+          x: Number(chassisOffsetX.toFixed(3)),
+          y: Number(chassisOffsetY.toFixed(3)),
+          z: Number(chassisOffsetZ.toFixed(3)),
+        },
+        muzzle: {
+          widthOffset: Number(muzzleOffsetX.toFixed(3)),
+          heightOffset: Number(muzzleOffsetY.toFixed(3)),
+          extensionOffset: Number(muzzleOffsetZ.toFixed(3)),
+        },
+        bobbing: {
+          height: Number(bobbingHeight.toFixed(3)),
+          speed: Number(bobbingSpeed.toFixed(2)),
+        },
+        physics: {
+          tiltPitch: Number(tiltPitch.toFixed(3)),
+          swayRoll: Number(swayRoll.toFixed(3)),
+          collisionRadius: Number(collisionRadius.toFixed(2)),
+        },
         effectBoneMappings: {
           Helm: ["EffectEyeGlow"],
           CoreRear: ["EffectLeftBooster", "EffectRightBooster", "EffectDashThruster"],
@@ -137,6 +200,17 @@ export function SandboxConfigPanel({
     customChassisRotation,
     customPropsScale,
     customPropsRotation,
+    chassisOffsetX,
+    chassisOffsetY,
+    chassisOffsetZ,
+    muzzleOffsetX,
+    muzzleOffsetY,
+    muzzleOffsetZ,
+    bobbingHeight,
+    bobbingSpeed,
+    tiltPitch,
+    swayRoll,
+    collisionRadius,
   ]);
 
   const handleCopy = () => {
@@ -200,6 +274,25 @@ export function SandboxConfigPanel({
         }
         if (typeof config.chassisOverrides.rotation === "number") {
           handleCustomChassisRotationChange(config.chassisOverrides.rotation);
+        }
+        if (config.chassisOverrides.offset) {
+          if (typeof config.chassisOverrides.offset.x === "number") handleChassisOffsetXChange(config.chassisOverrides.offset.x);
+          if (typeof config.chassisOverrides.offset.y === "number") handleChassisOffsetYChange(config.chassisOverrides.offset.y);
+          if (typeof config.chassisOverrides.offset.z === "number") handleChassisOffsetZChange(config.chassisOverrides.offset.z);
+        }
+        if (config.chassisOverrides.muzzle) {
+          if (typeof config.chassisOverrides.muzzle.widthOffset === "number") handleMuzzleOffsetXChange(config.chassisOverrides.muzzle.widthOffset);
+          if (typeof config.chassisOverrides.muzzle.heightOffset === "number") handleMuzzleOffsetYChange(config.chassisOverrides.muzzle.heightOffset);
+          if (typeof config.chassisOverrides.muzzle.extensionOffset === "number") handleMuzzleOffsetZChange(config.chassisOverrides.muzzle.extensionOffset);
+        }
+        if (config.chassisOverrides.bobbing) {
+          if (typeof config.chassisOverrides.bobbing.height === "number") handleBobbingHeightChange(config.chassisOverrides.bobbing.height);
+          if (typeof config.chassisOverrides.bobbing.speed === "number") handleBobbingSpeedChange(config.chassisOverrides.bobbing.speed);
+        }
+        if (config.chassisOverrides.physics) {
+          if (typeof config.chassisOverrides.physics.tiltPitch === "number") handleTiltPitchChange(config.chassisOverrides.physics.tiltPitch);
+          if (typeof config.chassisOverrides.physics.swayRoll === "number") handleSwayRollChange(config.chassisOverrides.physics.swayRoll);
+          if (typeof config.chassisOverrides.physics.collisionRadius === "number") handleCollisionRadiusChange(config.chassisOverrides.physics.collisionRadius);
         }
       }
 
