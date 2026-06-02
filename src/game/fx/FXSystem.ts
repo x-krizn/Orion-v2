@@ -375,6 +375,46 @@ export class FXSystem {
   }
 
   /**
+   * Spawns a visual effect directly from a registered socket.
+   * If the socket object is provided, it extracts its absolute position.
+   * Otherwise, it falls back to a provided standard position vector.
+   */
+  public spawnFromSocket(
+    socket: TransformNode | Mesh | undefined,
+    fallbackPos: Vector3,
+    fxType: "laser" | "beam" | "explosion" | "trail",
+    target?: Vector3,
+    onHit?: () => void
+  ): void {
+    if (socket) {
+      socket.computeWorldMatrix(true);
+    }
+    const origin = socket ? socket.getAbsolutePosition() : fallbackPos;
+    
+    switch (fxType) {
+      case "laser":
+        if (target) {
+          const heading = target.subtract(origin).normalize();
+          this.spawnLaserShell(origin, heading, 30, onHit || (() => {}));
+        }
+        break;
+      case "beam":
+        if (target) {
+          this.spawnHeavyBeam(origin, target);
+        }
+        break;
+      case "explosion":
+        this.spawnExplosion(origin);
+        break;
+      case "trail":
+        if (target) {
+          this.spawnBoosterTrail(origin, target);
+        }
+        break;
+    }
+  }
+
+  /**
    * Safe disposal buffer clean up
    */
   public clearAll(): void {

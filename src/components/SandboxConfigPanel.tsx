@@ -101,6 +101,21 @@ export function SandboxConfigPanel({
   const [copied, setCopied] = useState(false);
   const [importError, setImportError] = useState("");
   const [importSuccess, setImportSuccess] = useState(false);
+  const [discoveredSockets, setDiscoveredSockets] = useState<string[]>([]);
+
+  // Periodically check player's socketManager for any newly discovered or attached sockets
+  useEffect(() => {
+    const handle = setInterval(() => {
+      const player = gameManagerRef.current?.player;
+      if (player?.socketManager) {
+        const list = player.socketManager.getDiscoveredSocketNames();
+        if (list.join(",") !== discoveredSockets.join(",")) {
+          setDiscoveredSockets(list);
+        }
+      }
+    }, 1000);
+    return () => clearInterval(handle);
+  }, [gameManagerRef, discoveredSockets]);
 
   // Generate dynamic JSON string reflecting active environment settings and custom placed layout
   const generateConfigJson = () => {
@@ -379,6 +394,29 @@ export function SandboxConfigPanel({
           <span>REAL-TIME SANDBOX EXPORTER</span>
         </div>
         Save, export, or import level assets layout maps and combat RIG effect mappings in standard JSON.
+      </div>
+
+      {/* Discovered Sockets Section */}
+      <div className="border border-white/5 bg-black/40 rounded p-2 text-[10px]">
+        <div className="text-[9px] font-bold text-white/50 tracking-widest block uppercase mb-1">
+          Discovered RIG Sockets ({discoveredSockets.length})
+        </div>
+        {discoveredSockets.length === 0 ? (
+          <div className="text-white/40 text-[9px] italic">No custom GLB mech loaded or no "socket_" transform nodes detected. Procedural defaults active.</div>
+        ) : (
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            {discoveredSockets.map((sockName, index) => {
+              const isPort = gameManagerRef.current?.player?.socketManager?.isPort(sockName);
+              const sideText = isPort ? "PORT" : "STB";
+              const sideColor = isPort ? "bg-cyan-500/10 text-cyan-400 border border-cyan-500/25" : "bg-orange-500/10 text-orange-400 border border-orange-500/25";
+              return (
+                <div key={index} className={`px-1.5 py-0.5 rounded text-[8px] font-mono leading-none ${sideColor}`}>
+                  {sockName} ({sideText})
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Primary Actions Grid */}

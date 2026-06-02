@@ -17,11 +17,14 @@ import {
 } from "@babylonjs/core";
 import { GameSettings, PlayerInput } from "../types";
 import { FXSystem } from "../fx/FXSystem";
+import { SocketManager } from "../rendering/SocketManager";
 
 export class CharacterController {
   private scene: Scene;
   private rootNode: TransformNode;
   private settings: GameSettings["movement"];
+  
+  public readonly socketManager: SocketManager = new SocketManager();
   
   // Custom visual components
   private proceduralVisualsRoot!: TransformNode;
@@ -286,6 +289,9 @@ export class CharacterController {
     this.customModelNode.parent = this.rootNode;
     this.customModelNode.position.set(0, 0, 0);
 
+    // Trigger socket discovery scan on the newly loaded custom model
+    this.socketManager.discoverSockets(node);
+
     // Track original transform parameters before applying dynamic offsets
     this.originalBaseScale.copyFrom(this.customModelNode.scaling);
     if (this.customModelNode.rotationQuaternion) {
@@ -457,6 +463,13 @@ export class CharacterController {
   }
 
   /**
+   * Attaches a module or weapon visual mesh to a named socket discovered on this player mech.
+   */
+  public attachModuleToSocket(moduleRoot: TransformNode, socketName: string): boolean {
+    return this.socketManager.attachModuleToSocket(moduleRoot, socketName);
+  }
+
+  /**
    * Set extensive precision alignment parameters for custom imported models
    */
   public setCustomAlignment(settings: {
@@ -520,6 +533,38 @@ export class CharacterController {
     this.activeArmToggle = !this.activeArmToggle;
     
     if (this.customModelNode) {
+      // 1. Attempt to find matching weapon fire socket based on naming rules (Odd = port/left, Even = starboard/right)
+      const socketName = this.activeArmToggle ? "socket_weapon_02" : "socket_weapon_01";
+      const altSocketName = this.activeArmToggle ? "socket_arm_02" : "socket_arm_01";
+      
+      let targetSocket = this.socketManager.getSocket(socketName) || 
+                         this.socketManager.getSocket(altSocketName) ||
+                         this.socketManager.getSocket("socket_muzzle");
+
+      if (targetSocket) {
+        targetSocket.computeWorldMatrix(true);
+        // Find if there's a child socket_muzzle or socket_fx underneath the active socket (e.g., nested in weapon attachment)
+        const childNodes = targetSocket.getChildTransformNodes ? targetSocket.getChildTransformNodes(false) : [];
+        const nestedMuzzle = childNodes.find(child => child.name.toLowerCase().startsWith("socket_muzzle")) ||
+                             childNodes.find(child => child.name.toLowerCase().startsWith("socket_fx"));
+        
+        if (nestedMuzzle) {
+          nestedMuzzle.computeWorldMatrix(true);
+          return nestedMuzzle.getAbsolutePosition();
+        }
+
+        // Check meshes inside standard child array representing muzzle if no nested transform node parent
+        const children = targetSocket.getChildren ? targetSocket.getChildren() : [];
+        const nestedMuzzleMesh = children.find(child => child.name.toLowerCase().startsWith("socket_muzzle"));
+        if (nestedMuzzleMesh) {
+          (nestedMuzzleMesh as any).computeWorldMatrix(true);
+          return (nestedMuzzleMesh as any).getAbsolutePosition();
+        }
+
+        return targetSocket.getAbsolutePosition();
+      }
+
+      // 2. Fallback to existing manual bounding calculations or gun arms if no socket matches
       const activeCustomArm = this.activeArmToggle ? this.customRightGunArm : this.customLeftGunArm;
       if (activeCustomArm) {
         // If we have custom arms detected, use its world matrix with a slight forward offset!

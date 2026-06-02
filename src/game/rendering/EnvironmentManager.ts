@@ -797,7 +797,7 @@ export class EnvironmentManager {
     // Hide default grid plane if walkable floor tile components exist
     const hasFloorItem = this.libraryItems.some(item => {
       const n = item.name.toLowerCase();
-      return n.includes("floor") || n.includes("tile") || n.includes("ground");
+      return n.includes("floor") || n.includes("tile") || n.includes("ground") || n.includes("pavement") || n.includes("deck") || n.includes("water") || n.includes("sea") || n.includes("ocean") || n.includes("lake");
     });
     if (hasFloorItem && this.ground) {
       this.ground.visibility = 0.0;
@@ -809,6 +809,11 @@ export class EnvironmentManager {
       return n.includes("floor") || n.includes("tile") || n.includes("ground") || n.includes("pavement") || n.includes("deck");
     });
 
+    const water = this.libraryItems.filter(item => {
+      const n = item.name.toLowerCase();
+      return n.includes("water") || n.includes("sea") || n.includes("ocean") || n.includes("river") || n.includes("lake") || n.includes("fluid") || n.includes("lava");
+    });
+
     const walls = this.libraryItems.filter(item => {
       const n = item.name.toLowerCase();
       return n.includes("wall") || n.includes("barrier") || n.includes("border") || n.includes("fence") || n.includes("gate") || n.includes("shield");
@@ -816,22 +821,23 @@ export class EnvironmentManager {
 
     const props = this.libraryItems.filter(item => {
       const n = item.name.toLowerCase();
-      return !floors.includes(item) && !walls.includes(item);
+      return !floors.includes(item) && !water.includes(item) && !walls.includes(item);
     });
 
     const arenaSize = this.settings.arenaSize;
 
-    // Spawns grid tiles
-    if (floors.length > 0) {
-      // Find typical spacing from the first floor component
-      const referenceFloor = floors[0];
-      const tempNode = referenceFloor.originalNode.instantiateHierarchy(this.rootNode) as TransformNode;
+    // Spawns grid tiles (including floors and water surfaces)
+    const gridSurfaces = [...floors, ...water];
+    if (gridSurfaces.length > 0) {
+      // Find typical spacing from the first available surface component
+      const referenceSurface = gridSurfaces[0];
+      const tempNode = referenceSurface.originalNode.instantiateHierarchy(this.rootNode) as TransformNode;
       tempNode.computeWorldMatrix(true);
       const bVecs = tempNode.getHierarchyBoundingVectors(true);
       const tempSize = bVecs.max.subtract(bVecs.min);
       
       let initialScale = 1.0;
-      if (referenceFloor.name.toLowerCase().includes("envirotest")) {
+      if (referenceSurface.name.toLowerCase().includes("envirotest")) {
         initialScale = this.kitScaleFactor;
       }
       let spacingX = tempSize.x * initialScale;
@@ -844,10 +850,12 @@ export class EnvironmentManager {
       const half = arenaSize / 2;
       for (let x = -half + spacingX/2; x <= half; x += spacingX) {
         for (let z = -half + spacingZ/2; z <= half; z += spacingZ) {
-          // Select a random floor tile from the floor group list
-          const floorItem = floors[Math.floor(Math.random() * floors.length)];
-          const spawned = floorItem.originalNode.instantiateHierarchy(this.rootNode) as TransformNode;
-          spawned.name = `DND_GLB_AUTO_FLOOR_${Date.now()}`;
+          // Select a random surface tile from the combined array
+          const surfaceItem = gridSurfaces[Math.floor(Math.random() * gridSurfaces.length)];
+          const spawned = surfaceItem.originalNode.instantiateHierarchy(this.rootNode) as TransformNode;
+          
+          const typePrefix = water.includes(surfaceItem) ? "WATER" : "FLOOR";
+          spawned.name = `DND_GLB_AUTO_${typePrefix}_${Date.now()}`;
           spawned.setEnabled(true);
           
           spawned.computeWorldMatrix(true);
@@ -860,26 +868,26 @@ export class EnvironmentManager {
           // Save original transformations
           let originalRotation = new Vector3(0, 0, 0);
           let originalQuaternion: Quaternion | null = null;
-          if (floorItem.originalNode.rotationQuaternion) {
-            originalQuaternion = floorItem.originalNode.rotationQuaternion.clone();
+          if (surfaceItem.originalNode.rotationQuaternion) {
+            originalQuaternion = surfaceItem.originalNode.rotationQuaternion.clone();
           } else {
-            originalRotation.copyFrom(floorItem.originalNode.rotation);
+            originalRotation.copyFrom(surfaceItem.originalNode.rotation);
           }
 
           let scale = 1.0;
-          if (floorItem.name.toLowerCase().includes("envirotest")) {
+          if (surfaceItem.name.toLowerCase().includes("envirotest")) {
             scale = this.kitScaleFactor;
           }
 
           const bounds = spawned.getHierarchyBoundingVectors(true);
           const heightOffset = -bounds.min.y * scale;
 
-          // Assures 4-tile floor group patterns have organic, randomized rotation steps (0, 90, 180, 270)
+          // Assures surface patterns have organic, randomized rotation steps (0, 90, 180, 270)
           const randomFloorRotation = Math.floor(Math.random() * 4) * (Math.PI / 2);
 
           const record: CustomPropRecord = {
             node: spawned,
-            originalScale: floorItem.originalNode.scaling.clone(),
+            originalScale: surfaceItem.originalNode.scaling.clone(),
             originalRotation,
             originalQuaternion,
             baseOffsetPos: new Vector3(x, heightOffset, z),
@@ -894,11 +902,11 @@ export class EnvironmentManager {
 
     // Spawns boundary fortress walls aligned perfectly with the floor tile grid
     if (walls.length > 0) {
-      // Find spacing based on floor coordinates if floors exist
+      // Find spacing based on floor/grid coordinates if surfaces exist
       let spacingX = 4.0;
       let spacingZ = 4.0;
-      if (floors.length > 0) {
-        const referenceFloor = floors[0];
+      if (gridSurfaces.length > 0) {
+        const referenceFloor = gridSurfaces[0];
         const tempNode = referenceFloor.originalNode.instantiateHierarchy(this.rootNode) as TransformNode;
         tempNode.computeWorldMatrix(true);
         const bVecs = tempNode.getHierarchyBoundingVectors(true);
