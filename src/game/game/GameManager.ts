@@ -16,7 +16,7 @@ import {
   MeshBuilder,
   TransformNode
 } from "@babylonjs/core";
-import { GameSettings, PerformanceStats, ModelAssetInfo, PlayerInput } from "../types";
+import { GameSettings, PerformanceStats, ModelAssetInfo, PlayerInput, GameplayAction } from "../types";
 import { InputController } from "../input/InputController";
 import { IsometricCamera } from "../camera/IsometricCamera";
 import { EnvironmentManager } from "../rendering/EnvironmentManager";
@@ -94,7 +94,25 @@ export class GameManager {
     data: EnemyData;
     health: number;
     maxHealth: number;
+    lastAttackTime?: number;
   }[] = [];
+
+  // Target Lock system structures
+  public lockRange = 35.0; // Lock range stat (m)
+  public lockSpeed = 2.0;  // Lock speed stat (secs to lock = 1 / lockSpeed)
+  public lockCount = 1;    // Lock count stat (max targets)
+  public lockRetention = true; // Lock retention metastat (locks do not break on turning away or distance)
+  public persistentAimDirection: Vector3 | null = null;
+  public lockedTargets: {
+    enemy: {
+      node: TransformNode;
+      data: EnemyData;
+      health: number;
+      maxHealth: number;
+    };
+    progress: number; // 0 to 1
+  }[] = [];
+  public autoLockEnabled = true;
 
   // Callbacks
   private onAssetListChanged: (assets: ModelAssetInfo[]) => void = () => {};
@@ -109,12 +127,17 @@ export class GameManager {
   constructor(
     canvas: HTMLCanvasElement, 
     onAssetListChanged: (assets: ModelAssetInfo[]) => void,
-    onLibraryItemsChanged?: (items: { id: string; name: string }[]) => void
+    onLibraryItemsChanged?: (items: { id: string; name: string }[]) => void,
+    arenaSizeOverride?: number
   ) {
     this.canvas = canvas;
     this.onAssetListChanged = onAssetListChanged;
     if (onLibraryItemsChanged) {
       this.onLibraryItemsChanged = onLibraryItemsChanged;
+    }
+
+    if (arenaSizeOverride !== undefined) {
+      this.settings.rendering.environment.arenaSize = arenaSizeOverride;
     }
     
     this.initEngine();
@@ -198,6 +221,11 @@ export class GameManager {
       this.settings.camera
     );
 
+    // Provide camera system's current live yaw angle to input controller
+    this.input.setCameraYawProvider(() => {
+      return this.settings.camera.yaw;
+    });
+
     // Bind Weapons/Dash events
     this.input.onDashPressed = () => {
       const state = this.input.getInputState();
@@ -213,21 +241,19 @@ export class GameManager {
         // Placement click handles spawning inside onPointerDown
         return;
       }
-      this.fireActiveArm();
+      this.triggerR1_Primary();
     };
 
     this.input.onAbilityPressed = (index) => {
       if (index === 1) {
-        // Laser sweep beam
-        this.fireHeavyFusionGatling();
+        // Q / 1: Off-hand Primary L1 action
+        this.triggerL1_OffPrimary();
       } else if (index === 2) {
-        // Perimeter tactical explosions
-        this.triggerTaticalOrbitalBombardment();
+        // E / 2: Off-hand Secondary L2 action
+        this.triggerL2_OffSecondary();
       } else {
-        // Short pulse emitter
-        this.player.triggerImpactFlash();
-        this.cameraSystem.triggerShake(0.4);
-        this.fx.spawnExplosion(this.player.getPosition(), 6, 0.8);
+        // F: Main-hand Secondary R2 action
+        this.triggerR2_Secondary();
       }
     };
 
@@ -243,6 +269,35 @@ export class GameManager {
             if (placedNode) {
               // Deploy cyber flare effect
               this.fx.spawnExplosion(pickResult.pickedPoint, 6, 0.45);
+            }
+          }
+        }
+      } else {
+        // Project Orion Combat Touch Controls
+        if (pickResult.hit && pickResult.pickedPoint) {
+          let hitEnemy: any = null;
+          if (pickResult.pickedMesh) {
+            const mesh = pickResult.pickedMesh;
+            // Trace the hierarchy (up to three levels) to locate any matching spawned enemy root node
+            hitEnemy = this.spawnedEnemies.find(e => 
+              e.node === mesh || 
+              e.node === mesh.parent || 
+              (mesh.parent && e.node === mesh.parent.parent)
+            );
+          }
+
+          if (hitEnemy) {
+            console.log(`[Target Lock]: Direct pointer-lock targeting acquired on ${hitEnemy.data.name}`);
+            this.toggleTargetLock(hitEnemy);
+          } else {
+            // Screen clicks and touches calibrate the independent torso facing orientation direction
+            const playerPos = this.player.getPosition();
+            const dir = pickResult.pickedPoint.subtract(playerPos);
+            dir.y = 0;
+            if (dir.length() > 0.1) {
+              dir.normalize();
+              this.persistentAimDirection = dir;
+              console.log(`[Aim Facing]: Persistent mech torso facing direction recalibrated: ${this.persistentAimDirection.toString()}`);
             }
           }
         }
@@ -297,6 +352,11 @@ export class GameManager {
    * Alternating guns projectiles deployment using dynamic data-driven weapon stats
    */
   private fireActiveArm(): void {
+    if (this.player.isOverheated) {
+      console.log("[Combat Warning]: System OVERHEATED! Cannot fire while coolant cycle completes.");
+      return;
+    }
+
     const weapon = this.getEquippedWeapon() || {
       id: "pulse_cannon",
       name: "Pulse Cannon",
@@ -305,6 +365,9 @@ export class GameManager {
       projectile: "pulse_projectile",
       rarity: "standard"
     };
+
+    // Increments Heat stat
+    this.player.increaseHeat(8);
 
     const muzzlePos = this.player.getMuzzlePointAndAlt();
     const targetPoint = this.get3DWorldPointerPos();
@@ -344,6 +407,8 @@ export class GameManager {
           this.fx.spawnExplosion(enemy.node.position, 4, 0.3);
           console.log(`[Combat]: Bullet Impact! Enemy: ${enemy.data.name}, Damage: ${finalDamage.toFixed(0)}, Health: ${enemy.health}/${enemy.maxHealth}`);
 
+          this.handleSuccessfulHit(enemy);
+
           if (enemy.health <= 0) {
             this.fx.spawnExplosion(enemy.node.position, 16, 1.4);
             this.cameraSystem.triggerShake(1.0);
@@ -368,6 +433,14 @@ export class GameManager {
    * Laser rail beam ability reading from abilities.json config
    */
   private fireHeavyFusionGatling(): void {
+    if (this.player.isOverheated) {
+      console.log("[Combat Warning]: System OVERHEATED! Cannot fire heavy weapons.");
+      return;
+    }
+
+    // Accumulates secondary heat
+    this.player.increaseHeat(18);
+
     const muzzlePos = this.player.getMuzzlePointAndAlt();
     const targetPoint = this.get3DWorldPointerPos();
 
@@ -396,6 +469,8 @@ export class GameManager {
         enemy.health -= finalDamage;
         this.fx.spawnExplosion(enemy.node.position, 6, 0.5);
         console.log(`[Combat]: Railbeam Burn! Enemy: ${enemy.data.name}, Damage: ${finalDamage.toFixed(0)}, Health: ${enemy.health}/${enemy.maxHealth}`);
+
+        this.handleSuccessfulHit(enemy);
 
         if (enemy.health <= 0) {
           this.fx.spawnExplosion(enemy.node.position, 16, 1.4);
@@ -838,6 +913,111 @@ export class GameManager {
   private update(deltaTimeSeconds: number): void {
     const playerInputState = this.input.getInputState();
 
+    // 1. Line of Sight & Range checks on locked targets
+    const playerPos = this.player.getPosition();
+    const obstacles = this.environment.getObstacles();
+
+    this.lockedTargets = this.lockedTargets.filter(lt => {
+      // Check if enemy still exists in spawnedEnemies
+      const exists = this.spawnedEnemies.some(e => e === lt.enemy);
+      if (!exists) return false;
+
+      // Check distance is within lockRange (only if lock retention is disabled)
+      const targetPos = lt.enemy.node.position;
+      if (!this.lockRetention) {
+        const dist = Vector3.Distance(playerPos, targetPos);
+        if (dist > this.lockRange) {
+          console.log(`[Target Lock]: Locked target ${lt.enemy.data.name} exceeded maximum range ${this.lockRange}m`);
+          return false;
+        }
+      }
+
+      // Check Line of Sight (LoS)
+      let hasLoS = true;
+      const rayDir = targetPos.subtract(playerPos);
+      const totalDist = rayDir.length();
+      rayDir.normalize();
+
+      for (const obstacle of obstacles) {
+        const obsCenter = obstacle.position;
+        const v = obsCenter.subtract(playerPos);
+        const projection = Vector3.Dot(v, rayDir);
+        
+        if (projection > 1.0 && projection < totalDist - 1.0) {
+          const closestSegmentPt = playerPos.add(rayDir.scale(projection));
+          const radialDist = Vector3.Distance(closestSegmentPt, obsCenter);
+          const obstacleRadius = 2.2; // default cyber column radius is standard
+          if (radialDist < obstacleRadius) {
+            hasLoS = false;
+            break;
+          }
+        }
+      }
+
+      if (!hasLoS) {
+        console.log(`[Target Lock]: Target ${lt.enemy.data.name} lock broken due to loss of line-of-sight!`);
+        return false;
+      }
+
+      // Charge up lock acquisition progress (Lock Speed stat!)
+      if (lt.progress < 1.0) {
+        lt.progress = Math.min(1.0, lt.progress + deltaTimeSeconds * this.lockSpeed);
+      }
+
+      return true;
+    });
+
+    // 2. Auto-lock closest valid target if we have 0 locks and autoLock is active
+    if (this.autoLockEnabled && this.lockedTargets.length === 0 && this.spawnedEnemies.length > 0) {
+      let closestEnemy: any = null;
+      let closestDist = this.lockRange;
+
+      this.spawnedEnemies.forEach(enemy => {
+        let hasLoS = true;
+        const targetPos = enemy.node.position;
+        const rayDir = targetPos.subtract(playerPos);
+        const dist = rayDir.length();
+        rayDir.normalize();
+
+        if (dist < closestDist) {
+          for (const obstacle of obstacles) {
+            const obsCenter = obstacle.position;
+            const v = obsCenter.subtract(playerPos);
+            const projection = Vector3.Dot(v, rayDir);
+            if (projection > 1.0 && projection < dist - 1.0) {
+              const closestSegmentPt = playerPos.add(rayDir.scale(projection));
+              const radialDist = Vector3.Distance(closestSegmentPt, obsCenter);
+              if (radialDist < 2.2) {
+                hasLoS = false;
+                break;
+              }
+            }
+          }
+          if (hasLoS) {
+            closestDist = dist;
+            closestEnemy = enemy;
+          }
+        }
+      });
+
+      if (closestEnemy) {
+        this.lockedTargets.push({
+          enemy: closestEnemy,
+          progress: 1.0
+        });
+      }
+    }
+
+    // 3. Set independent aiming position based on locked target or cursor/persistent touch tap
+    if (this.lockedTargets.length > 0 && this.lockedTargets[0].progress >= 1.0) {
+      this.player.setAimPoint(this.lockedTargets[0].enemy.node.position);
+    } else if (this.persistentAimDirection) {
+      this.player.setAimPoint(this.player.getPosition().add(this.persistentAimDirection.scale(10.0)));
+    } else {
+      const pointerPt = this.get3DWorldPointerPos();
+      this.player.setAimPoint(pointerPt);
+    }
+
     // Update Player & follow camera
     this.player.update(deltaTimeSeconds, playerInputState, this.fx, this.environment.getObstacles());
     this.cameraSystem.setTarget(this.player.getPosition());
@@ -846,17 +1026,34 @@ export class GameManager {
     // Update Particles
     this.fx.update(deltaTimeSeconds);
 
-    // Dynamic hover motion & orientation of spawned enemies facing player
+    // Dynamic hover motion & orientation of spawned enemies facing player + chasing AI
     this.spawnedEnemies.forEach(enemy => {
       // Interpolate angles towards player heading
       const dir = this.player.getPosition().subtract(enemy.node.position);
       dir.y = 0;
-      if (dir.length() > 0.1) {
+      const length = dir.length();
+      
+      if (length > 0.1) {
         dir.normalize();
         const targetRotY = Math.atan2(dir.x, dir.z);
         const diffY = targetRotY - enemy.node.rotation.y;
         const wrapped = Math.atan2(Math.sin(diffY), Math.cos(diffY));
         enemy.node.rotation.y += wrapped * Math.min(1.0, deltaTimeSeconds * 3.5);
+      }
+      
+      // Melee and Chasing AI
+      if (length > 2.8) {
+        // Chase player
+        enemy.node.position.addInPlace(dir.scale(deltaTimeSeconds * 3.0));
+      } else {
+        // Melee attack player
+        const now = Date.now();
+        if (!enemy.lastAttackTime || now - enemy.lastAttackTime > 1800) {
+          enemy.lastAttackTime = now;
+          this.player.takeDamage(45);
+          this.cameraSystem.triggerShake(0.6);
+          this.fx.spawnExplosion(playerPos.add(new Vector3(0, 1.0, 0)), 4, 0.35);
+        }
       }
       
       // Floating bounce animation loop
@@ -943,6 +1140,369 @@ export class GameManager {
 
     this.fx.setThemeColors(primaryColor);
     this.player.setThemeColor(primaryColor);
+  }
+
+  public toggleTargetLock(enemy: any): void {
+    const activeLockIdx = this.lockedTargets.findIndex(lt => lt.enemy === enemy);
+    if (activeLockIdx >= 0) {
+      this.lockedTargets.splice(activeLockIdx, 1);
+      console.log(`[Target Lock]: Broke lock on enemy ${enemy.data.name}`);
+      return;
+    }
+    
+    // Check lock distance
+    const dist = Vector3.Distance(this.player.getPosition(), enemy.node.position);
+    if (dist > this.lockRange) {
+      console.log(`[Target Lock]: Cannot lock ${enemy.data.name}, out of range (${dist.toFixed(1)}m > ${this.lockRange}m)`);
+      return;
+    }
+    
+    // Respect Lock Count stat
+    if (this.lockedTargets.length >= this.lockCount) {
+      this.lockedTargets.shift();
+    }
+    
+    this.lockedTargets.push({
+      enemy: enemy,
+      progress: 0.0 // starts acquiring at lockSpeed rate
+    });
+    console.log(`[Target Lock]: Acquiring lock on enemy ${enemy.data.name}`);
+  }
+
+  public handleSuccessfulHit(enemy: any): void {
+    if (this.lockedTargets.length === 0) {
+      this.toggleTargetLock(enemy);
+    }
+  }
+
+  // ===================================================================
+  // PROJECT ORION COMBAT ENGINE & INPUT COUPLING METHODS
+  // ===================================================================
+
+  private damageEnemy(enemy: any, amount: number): void {
+    enemy.health -= amount;
+    this.fx.spawnExplosion(enemy.node.position, 4, 0.35);
+    console.log(`[Combat Damage]: Dealt ${amount} damage to ${enemy.data.name}. HP: ${enemy.health}/${enemy.maxHealth}`);
+    this.handleSuccessfulHit(enemy);
+    
+    if (enemy.health <= 0) {
+      this.fx.spawnExplosion(enemy.node.position, 16, 1.4);
+      this.cameraSystem.triggerShake(1.0);
+      enemy.node.dispose();
+      const idx = this.spawnedEnemies.indexOf(enemy);
+      if (idx >= 0) {
+        this.spawnedEnemies.splice(idx, 1);
+      }
+    }
+  }
+
+  public triggerR1_Primary(): void {
+    if (this.player.isOverheated) {
+      console.log("[Combat Warning]: Cannons locked due to overheat scan.");
+      return;
+    }
+    const isPowerstance = this.player.stance === "powerstance";
+    
+    if (!isPowerstance) {
+      // Standard R1: Quick rifle burst bullet (cancelable)
+      const action: GameplayAction = {
+        id: "standard_r1",
+        name: "PULSE MULTI-FIRE",
+        duration: 0.15,
+        elapsed: 0,
+        cancelable: true,
+        type: "skill",
+        onComplete: () => {
+          this.fireActiveArm();
+        }
+      };
+      this.player.triggerAction(action);
+    } else {
+      // Powerstance R1: Powerstance Dual Blade Slash Arc sweep
+      const action: GameplayAction = {
+        id: "powerstance_r1",
+        name: "DUAL BLADE SLASH",
+        duration: 0.32,
+        elapsed: 0,
+        cancelable: true,
+        type: "skill",
+        onComplete: () => {
+          this.player.increaseHeat(12);
+          const playerPos = this.player.getPosition();
+          this.fx.spawnExplosion(playerPos, 12, 0.9);
+          this.cameraSystem.triggerShake(0.32);
+          
+          const forward = this.player.getRootNode().forward || new Vector3(0, 0, 1);
+          const targets = [...this.spawnedEnemies];
+          targets.forEach(e => {
+            const toEnemy = e.node.position.subtract(playerPos);
+            const dist = toEnemy.length();
+            if (dist < 6.8) {
+              toEnemy.normalize();
+              const dot = Vector3.Dot(forward, toEnemy);
+              if (dot > 0.32) { // 72 degree forward sweep cone
+                this.damageEnemy(e, 145);
+              }
+            }
+          });
+        }
+      };
+      this.player.triggerAction(action);
+    }
+  }
+
+  public triggerR2_Secondary(): void {
+    if (this.player.isOverheated) return;
+    const isPowerstance = this.player.stance === "powerstance";
+
+    if (!isPowerstance) {
+      // Standard R2: Charged Launcher Mortar Strike (cancelable)
+      const action: GameplayAction = {
+        id: "standard_r2",
+        name: "MORTAR TARGETING",
+        duration: 1.1,
+        elapsed: 0,
+        cancelable: true,
+        type: "charge",
+        onComplete: () => {
+          this.player.increaseHeat(20);
+          this.triggerTaticalOrbitalBombardment();
+        }
+      };
+      this.player.triggerAction(action);
+    } else {
+      // Powerstance R2: Arcane Cross Wave
+      const action: GameplayAction = {
+        id: "powerstance_r2",
+        name: "CROSS ENERGY WAVE",
+        duration: 0.85,
+        elapsed: 0,
+        cancelable: true,
+        type: "charge",
+        onComplete: () => {
+          this.player.increaseHeat(18);
+          const playerPos = this.player.getPosition();
+          const forward = this.player.getRootNode().forward || new Vector3(0, 0, 1);
+          
+          // Triple fiery cascading explosions traveling forward
+          for (let i = 1; i <= 3; i++) {
+            const impactPoint = playerPos.add(forward.scale(i * 4.6));
+            setTimeout(() => {
+              if (this.isDisposed) return;
+              this.fx.spawnExplosion(impactPoint, 6, 0.8);
+              this.cameraSystem.triggerShake(0.3);
+              const targets = [...this.spawnedEnemies];
+              targets.forEach(e => {
+                if (Vector3.Distance(e.node.position, impactPoint) < 4.2) {
+                  this.damageEnemy(e, 190);
+                }
+              });
+            }, i * 140);
+          }
+        }
+      };
+      this.player.triggerAction(action);
+    }
+  }
+
+  public triggerL1_OffPrimary(): void {
+    const isPowerstance = this.player.stance === "powerstance";
+
+    if (!isPowerstance) {
+      // Standard L1: Aegis Shield Barrier Block (2.2s channel)
+      const cost = 15;
+      if (this.player.en < cost) {
+        console.log("[Combat Block]: Deficient EN energy!");
+        return;
+      }
+      this.player.en -= cost;
+      
+      const action: GameplayAction = {
+        id: "aegis_block",
+        name: "AEGIS SHIELD BARRIER",
+        duration: 2.2,
+        elapsed: 0,
+        cancelable: true,
+        type: "channel",
+        onComplete: () => {
+          console.log("[Shield Collapse]: Barrier down.");
+        }
+      };
+      this.player.triggerAction(action);
+    } else {
+      // Powerstance L1: Deflection Shield Parry
+      const action: GameplayAction = {
+        id: "parry_action",
+        name: "DEFLECTION DEFLECT PARRY",
+        duration: 0.45,
+        elapsed: 0,
+        cancelable: true,
+        type: "skill",
+        onComplete: () => {
+          console.log("[Parry Expire]: Deflection frames expired.");
+        }
+      };
+      this.player.triggerAction(action);
+    }
+  }
+
+  public triggerL2_OffSecondary(): void {
+    if (this.player.isOverheated) return;
+    const isPowerstance = this.player.stance === "powerstance";
+
+    if (!isPowerstance) {
+      // Standard L2: Railbeam Sweep charging
+      const action: GameplayAction = {
+        id: "standard_l2",
+        name: "FUSION RAILBEAM CHARGE",
+        duration: 1.5,
+        elapsed: 0,
+        cancelable: true,
+        type: "channel",
+        onComplete: () => {
+          this.player.increaseHeat(22);
+          this.fireHeavyFusionGatling();
+        }
+      };
+      this.player.triggerAction(action);
+    } else {
+      // Powerstance L2: Arcane Cross Vortex (Channel spinning dual blade blade vortex)
+      const action: GameplayAction = {
+        id: "powerstance_l2",
+        name: "ARCANE BLADE VORTEX",
+        duration: 1.8,
+        elapsed: 0,
+        cancelable: true,
+        type: "channel",
+        onComplete: () => {
+          this.player.increaseHeat(24);
+          const pos = this.player.getPosition();
+          // Burst 6 surrounding shockwave nodes
+          for (let j = 0; j < 6; j++) {
+            const angle = (j / 6) * Math.PI * 2;
+            const auraPt = pos.add(new Vector3(Math.cos(angle) * 4.8, 0, Math.sin(angle) * 4.8));
+            this.fx.spawnExplosion(auraPt, 5, 0.6);
+          }
+          this.cameraSystem.triggerShake(0.6);
+          const targets = [...this.spawnedEnemies];
+          targets.forEach(e => {
+            if (Vector3.Distance(e.node.position, pos) < 7.2) {
+              this.damageEnemy(e, 275);
+            }
+          });
+        }
+      };
+      this.player.triggerAction(action);
+    }
+  }
+
+  public triggerButtonDash(): void {
+    const cost = 25;
+    if (this.player.en < cost) {
+      console.log("[Dash Cancel]: Low energy!");
+      return;
+    }
+    
+    // Check running action cancelable
+    if (this.player.currentAction) {
+      if (this.player.currentAction.cancelable) {
+        this.player.cancelCurrentAction();
+      } else {
+        console.log("[Dash Cancel]: Cannot interrupt committed stance swap!");
+        return;
+      }
+    }
+    
+    this.player.en -= cost;
+    this.input.triggerDash();
+  }
+
+  public triggerStanceSwap(): void {
+    if (this.player.isOverheated) {
+      console.log("[Combat Warning]: System overheated! Cannot toggle slots.");
+      return;
+    }
+    const currentStance = this.player.stance;
+    const nextStance = currentStance === "standard" ? "powerstance" : "standard";
+
+    const action: GameplayAction = {
+      id: "stance_swap",
+      name: `CALIBRATING socket ${nextStance.toUpperCase()}`,
+      duration: 1.25,
+      elapsed: 0,
+      cancelable: false, // animation commitment!
+      type: "stance_change",
+      onComplete: () => {
+        this.player.stance = nextStance;
+        if (nextStance === "powerstance") {
+          // Fire blade orange
+          const magma = new Color3(1.0, 0.42, 0.0);
+          this.player.setThemeColor(magma);
+          this.fx.setThemeColors(magma);
+        } else {
+          // Classic cyber cyan
+          const cyan = new Color3(0.0, 0.85, 1.0);
+          this.player.setThemeColor(cyan);
+          this.fx.setThemeColors(cyan);
+        }
+        this.fx.spawnExplosion(this.player.getPosition(), 10, 1.2);
+        this.cameraSystem.triggerShake(0.55);
+        console.log(`[Stance Shift]: Re-aligned sockets to slot ${nextStance.toUpperCase()}`);
+      }
+    };
+    this.player.triggerAction(action);
+  }
+
+  public triggerActionCancel(): void {
+    if (this.player.currentAction) {
+      if (this.player.currentAction.cancelable) {
+        this.player.cancelCurrentAction();
+        this.fx.spawnHitImpact(this.player.getPosition().add(new Vector3(0, 1.2, 0)));
+      } else {
+        console.log("[Action Intercept]: Cannot cancel committed transition!");
+      }
+    } else {
+      // Clear target locks if no action is running
+      this.lockedTargets = [];
+      console.log("[Target Lock]: Manually cleared all locks.");
+    }
+  }
+
+  public triggerContextAction(): void {
+    const cost = 20;
+    if (this.player.en < cost) {
+      console.log("[Combat Action]: Low energy resist!");
+      return;
+    }
+
+    const action: GameplayAction = {
+      id: "core_burst",
+      name: "CORE SHOCKWAVE",
+      duration: 0.6,
+      elapsed: 0,
+      cancelable: true,
+      type: "activation",
+      onComplete: () => {
+        this.player.en -= cost;
+        this.player.triggerImpactFlash();
+        this.cameraSystem.triggerShake(0.6);
+        this.fx.spawnExplosion(this.player.getPosition(), 10, 1.45);
+        
+        const playerPos = this.player.getPosition();
+        const targets = [...this.spawnedEnemies];
+        targets.forEach(e => {
+          const dist = Vector3.Distance(playerPos, e.node.position);
+          if (dist < 8.2) {
+            const dir = e.node.position.subtract(playerPos);
+            dir.y = 0;
+            dir.normalize();
+            e.node.position.addInPlace(dir.scale(3.5)); // knockback displacement
+            this.damageEnemy(e, 120);
+          }
+        });
+      }
+    };
+    this.player.triggerAction(action);
   }
 
   /**

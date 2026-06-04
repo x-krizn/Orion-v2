@@ -15,7 +15,7 @@ import {
   ShadowGenerator,
   Quaternion,
 } from "@babylonjs/core";
-import { GameSettings, PlayerInput } from "../types";
+import { GameSettings, PlayerInput, GameplayAction } from "../types";
 import { FXSystem } from "../fx/FXSystem";
 import { SocketManager } from "../rendering/SocketManager";
 
@@ -28,9 +28,56 @@ export class CharacterController {
   
   // Custom visual components
   private proceduralVisualsRoot!: TransformNode;
+  public torsoAssembly!: TransformNode;
   private customModelNode: TransformNode | null = null;
   private boundsSize: number;
   private trailEmitTimer = 0;
+
+  // Souls Mech resources & stats
+  public hp = 1000;
+  public maxHp = 1000;
+  public en = 100;
+  public maxEn = 100;
+  public heat = 0;
+  public maxHeat = 100;
+  public armor = 200;
+  public maxArmor = 200;
+  public isOverheated = false;
+  private timeSinceDamage = 0;
+
+  // Unified Action-State Framework
+  public currentAction: GameplayAction | null = null;
+  public stance: "standard" | "powerstance" = "standard";
+
+  public triggerAction(action: GameplayAction): boolean {
+    if (this.currentAction) {
+      if (!this.currentAction.cancelable) {
+        console.log(`[Action Warning]: Cannot execute "${action.name}" during committed "${this.currentAction.name}"`);
+        return false;
+      }
+      this.cancelCurrentAction();
+    }
+    this.currentAction = { ...action, elapsed: 0 };
+    console.log(`[Action State]: Started action "${action.name}" (${action.type}) duration ${action.duration}s`);
+    return true;
+  }
+
+  public cancelCurrentAction(): boolean {
+    if (this.currentAction) {
+      if (!this.currentAction.cancelable) {
+        console.log(`[Action Warning]: Action "${this.currentAction.name}" has animation commitment and cannot be canceled!`);
+        return false;
+      }
+      console.log(`[Action Cancel]: Interrupted running action "${this.currentAction.name}" successfully.`);
+      this.currentAction.onCancel?.();
+      this.currentAction = null;
+      return true;
+    }
+    return false;
+  }
+
+  // Aiming position (independent facing)
+  private aimPoint: Vector3 | null = null;
 
   // Lists for custom meshes detected on user uploaded warrior models
   private customEyeGlowMeshes: Mesh[] = [];
@@ -138,37 +185,41 @@ export class CharacterController {
     goldMat.diffuseColor = new Color3(0.7, 0.45, 0.05);
     goldMat.specularColor = new Color3(0.9, 0.7, 0.2);
 
+    // Instantiate decoupled upper Torso Assembly
+    this.torsoAssembly = new TransformNode("mechTorsoAssembly", this.scene);
+    this.torsoAssembly.parent = this.proceduralVisualsRoot;
+
     // 1. Torso/Chassis (Prism/Box combo)
     const torso = MeshBuilder.CreateBox("mechTorso", { width: 1.6, height: 1.2, depth: 1.2 }, this.scene);
     torso.position.set(0, 1.6, 0);
     torso.material = frameMat;
-    torso.parent = this.proceduralVisualsRoot;
+    torso.parent = this.torsoAssembly;
     this.flashMeshes.push(torso);
 
     // 2. Visor Head
     const head = MeshBuilder.CreateBox("mechHead", { width: 0.8, height: 0.4, depth: 0.7 }, this.scene);
     head.position.set(0, 2.3, 0.1);
     head.material = accentMat;
-    head.parent = this.proceduralVisualsRoot;
+    head.parent = this.torsoAssembly;
     this.flashMeshes.push(head);
 
     const visor = MeshBuilder.CreateBox("mechVisor", { width: 0.6, height: 0.1, depth: 0.05 }, this.scene);
     visor.position.set(0, 2.3, 0.46);
     visor.material = visorMat;
-    visor.parent = this.proceduralVisualsRoot;
+    visor.parent = this.torsoAssembly;
 
     // 3. Right Gun Arm Assembly (Alternating weapon muzzle)
     const rightShoulder = MeshBuilder.CreateCylinder("rightShoulder", { diameter: 0.5, height: 0.4 }, this.scene);
     rightShoulder.position.set(1.05, 1.7, 0);
     rightShoulder.rotation.z = Math.PI / 2;
     rightShoulder.material = goldMat;
-    rightShoulder.parent = this.proceduralVisualsRoot;
+    rightShoulder.parent = this.torsoAssembly;
 
     this.rightGunArm = MeshBuilder.CreateCylinder("rightGunArm", { diameterTop: 0.25, diameterBottom: 0.35, height: 1.2 }, this.scene);
     this.rightGunArm.position.set(1.15, 1.3, 0.3);
     this.rightGunArm.rotation.x = Math.PI / 2; // Arm pointing forward
     this.rightGunArm.material = frameMat;
-    this.rightGunArm.parent = this.proceduralVisualsRoot;
+    this.rightGunArm.parent = this.torsoAssembly;
     this.flashMeshes.push(this.rightGunArm);
 
     // Right emitter glow barrel
@@ -182,13 +233,13 @@ export class CharacterController {
     leftShoulder.position.set(-1.05, 1.7, 0);
     leftShoulder.rotation.z = Math.PI / 2;
     leftShoulder.material = goldMat;
-    leftShoulder.parent = this.proceduralVisualsRoot;
+    leftShoulder.parent = this.torsoAssembly;
 
     this.leftGunArm = MeshBuilder.CreateCylinder("leftGunArm", { diameterTop: 0.25, diameterBottom: 0.35, height: 1.2 }, this.scene);
     this.leftGunArm.position.set(-1.15, 1.3, 0.3);
     this.leftGunArm.rotation.x = Math.PI / 2;
     this.leftGunArm.material = frameMat;
-    this.leftGunArm.parent = this.proceduralVisualsRoot;
+    this.leftGunArm.parent = this.torsoAssembly;
     this.flashMeshes.push(this.leftGunArm);
 
     // Left emitter glow barrel
@@ -600,8 +651,9 @@ export class CharacterController {
    * Dash mechanic that pushes player forward
    */
   public executeDash(direction: Vector3): boolean {
-    if (this.dashCooldownTimer > 0 || this.isDashing) return false;
+    if (this.dashCooldownTimer > 0 || this.isDashing || this.en < 22) return false;
 
+    this.en -= 22;
     this.isDashing = true;
     this.dashCooldownTimer = this.dashCooldownDuration; // Cooldown from abilities configuration
     
@@ -629,9 +681,46 @@ export class CharacterController {
    * Physical loop computation. Takes raw inputs and computes responsive, snapping movement
    */
   public update(deltaTimeSeconds: number, input: PlayerInput, fx?: FXSystem, obstacles?: Mesh[]): void {
+    // Process Souls-mech resource metrics
+    this.timeSinceDamage += deltaTimeSeconds;
+    
+    // Shield/Armor regeneration
+    if (this.timeSinceDamage > 3.5 && this.armor < this.maxArmor) {
+      this.armor = Math.min(this.maxArmor, this.armor + deltaTimeSeconds * 15.0);
+    }
+    
+    // EN regeneration
+    if (this.en < this.maxEn) {
+      this.en = Math.min(this.maxEn, this.en + deltaTimeSeconds * 25.0);
+    }
+    
+    // Heat cooling decay
+    if (this.isOverheated) {
+      this.heat = Math.max(0, this.heat - deltaTimeSeconds * 28.0);
+      if (this.heat <= 0) {
+        this.isOverheated = false;
+        console.log("[Combat Warning]: System cooled and stabilized!");
+      }
+    } else if (this.heat > 0) {
+      this.heat = Math.max(0, this.heat - deltaTimeSeconds * 20.0);
+    }
+
     // 1. Process cooldown timers
     if (this.dashCooldownTimer > 0) {
       this.dashCooldownTimer -= deltaTimeSeconds;
+    }
+
+    // Process gameplay actions ticking
+    if (this.currentAction) {
+      this.currentAction.elapsed += deltaTimeSeconds;
+      if (this.currentAction.elapsed >= this.currentAction.duration) {
+        const completed = this.currentAction;
+        this.currentAction = null;
+        console.log(`[Action Complete]: Unified Action Completed: "${completed.name}"`);
+        if (completed.onComplete) {
+          completed.onComplete();
+        }
+      }
     }
 
     // Process status effects
@@ -680,6 +769,13 @@ export class CharacterController {
     this.velocity.setAll(0);
 
     let activeSpeed = this.settings.speed;
+    if (this.currentAction) {
+      if (this.currentAction.type === "stance_change") {
+        activeSpeed *= 0.15; // Stance transitions heavily restrict translation
+      } else if (this.currentAction.type === "channel" || this.currentAction.type === "charge") {
+        activeSpeed *= 0.35; // Channeling/charging heavy weapon actions slows movement
+      }
+    }
     if (this.activeStatusEffect && this.activeStatusEffect.modifiers && this.activeStatusEffect.modifiers.speedMult !== undefined) {
       activeSpeed *= this.activeStatusEffect.modifiers.speedMult;
     }
@@ -779,6 +875,27 @@ export class CharacterController {
       this.rootNode.rotation.y = this.currentRotation;
     }
 
+    // Determine Torso facing direction (independent of movement)
+    let targetFacingY = this.currentRotation;
+    if (this.aimPoint) {
+      const dir = this.aimPoint.subtract(this.rootNode.position);
+      dir.y = 0;
+      if (dir.length() > 0.1) {
+        targetFacingY = Math.atan2(dir.x, dir.z);
+      }
+    }
+    
+    const diffFacing = targetFacingY - this.currentRotation;
+    const wrappedDiffFacing = Math.atan2(Math.sin(diffFacing), Math.cos(diffFacing));
+
+    if (this.torsoAssembly) {
+      // Smoothly rotate torso assembly towards independent aiming direction
+      const torsoRotStep = 8.0 * deltaTimeSeconds;
+      let diffTorso = wrappedDiffFacing - this.torsoAssembly.rotation.y;
+      let wrappedDiffTorso = Math.atan2(Math.sin(diffTorso), Math.cos(diffTorso));
+      this.torsoAssembly.rotation.y += Math.max(-torsoRotStep, Math.min(torsoRotStep, wrappedDiffTorso));
+    }
+
     // Add high-fidelity dynamic floating bobbing and tilting animations for custom mech models
     if (this.customModelNode) {
       // Hovering bobbing float on y-axis (adds beautiful metallic floating feeling)
@@ -805,14 +922,15 @@ export class CharacterController {
         this.baseOffsetPos.z + this.customOffsetZ
       );
       
-      // Rotation combining the custom Y offset + yaw sway + pitch tilt
+      // Rotation combining the custom Y offset + yaw sway + pitch tilt + decoupled facing diff
+      const finalYRot = this.customRotationYOffset + tiltRoll + wrappedDiffFacing;
       if (this.originalBaseQuaternion) {
-        const extraRot = Quaternion.RotationYawPitchRoll(this.customRotationYOffset + tiltRoll, tiltPitch, 0);
+        const extraRot = Quaternion.RotationYawPitchRoll(finalYRot, tiltPitch, 0);
         this.customModelNode.rotationQuaternion = this.originalBaseQuaternion.multiply(extraRot);
       } else {
         this.customModelNode.rotation.set(
           this.originalBaseRotation.x + tiltPitch,
-          this.originalBaseRotation.y + this.customRotationYOffset + tiltRoll,
+          this.originalBaseRotation.y + finalYRot,
           this.originalBaseRotation.z
         );
       }
@@ -873,6 +991,50 @@ export class CharacterController {
         }
       }
     }
+  }
+
+  public setAimPoint(point: Vector3 | null): void {
+    this.aimPoint = point;
+  }
+
+  public takeDamage(amount: number): void {
+    this.timeSinceDamage = 0;
+    this.triggerImpactFlash();
+    
+    // 1. Parry Check: 100% damage deflection
+    if (this.currentAction && this.currentAction.id === "parry_action") {
+      console.log("[Parry Triggered]: Successful parry! Deflected all incoming damage.");
+      this.currentAction = null; // Consume parry frame commitment
+      return;
+    }
+
+    // 2. Shield Block Check: 80% damage reduction
+    if (this.currentAction && this.currentAction.id === "aegis_block") {
+      const blockedAmount = amount * 0.2;
+      console.log(`[Shield Block]: Aegis Barrier absorbed damage! Reduced ${amount.toFixed(0)} to ${blockedAmount.toFixed(0)}`);
+      amount = blockedAmount;
+    }
+    
+    // Shield/Armor absorbs 100% of the damage if active
+    if (this.armor > 0) {
+      const absorbed = Math.min(this.armor, amount);
+      this.armor -= absorbed;
+      amount -= absorbed;
+    }
+    
+    if (amount > 0) {
+      this.hp = Math.max(0, this.hp - amount);
+    }
+  }
+
+  public increaseHeat(amount: number): boolean {
+    if (this.isOverheated) return true;
+    this.heat = Math.min(this.maxHeat, this.heat + amount);
+    if (this.heat >= this.maxHeat) {
+      this.isOverheated = true;
+      console.log("[Combat Warning]: System OVERHEAT! Weapons lock is active!");
+    }
+    return this.isOverheated;
   }
 
   public getDashCooldownProgress(): number {

@@ -24,6 +24,9 @@ export class InputController {
   private joystickVector = { x: 0, y: 0 };
   private maxJoystickDist = 60; // Max drag range in pixels
 
+  // Camera yaw angle retriever for camera-relative translations
+  private getCameraYaw: () => number = () => 45 * (Math.PI / 180);
+
   // Trigger callbacks
   public onDashPressed: () => void = () => {};
   public onFirePressed: (targetWorldPoint?: Vector3) => void = () => {};
@@ -32,6 +35,13 @@ export class InputController {
   constructor() {
     this.initKeyboard();
     this.initMouse();
+  }
+
+  /**
+   * Register a custom provider callback to query current camera yaw rotation
+   */
+  public setCameraYawProvider(provider: () => number): void {
+    this.getCameraYaw = provider;
   }
 
   private initKeyboard(): void {
@@ -156,14 +166,25 @@ export class InputController {
       dx += 1;
     }
 
-    let dir = new Vector3(dx, 0, dz);
+    let inputX = dx;
+    let inputY = dz;
 
     // 2. Process Joystick inputs (override or combine)
     if (this.joystickActive && (this.joystickVector.x !== 0 || this.joystickVector.y !== 0)) {
-      // Translate joystick coords (-1 to 1) into 3D Game World directions:
-      // Left/Right joystick -> standard world X-axis
-      // Up/Down joystick -> standard world Z-axis
-      dir = new Vector3(this.joystickVector.x, 0, -this.joystickVector.y);
+      inputX = this.joystickVector.x;
+      inputY = -this.joystickVector.y; // Invert vertical slider to translate UP drags positively
+    }
+
+    let dir = new Vector3(0, 0, 0);
+
+    if (inputX !== 0 || inputY !== 0) {
+      const yaw = this.getCameraYaw();
+      // Calculate movement relative to the camera face projected on the ground
+      // Forward direction away from camera: (-sin(yaw), 0, cos(yaw))
+      // Right direction relative to camera: (cos(yaw), 0, sin(yaw))
+      const fx = -Math.sin(yaw) * inputY + Math.cos(yaw) * inputX;
+      const fz = Math.cos(yaw) * inputY + Math.sin(yaw) * inputX;
+      dir.set(fx, 0, fz);
     }
 
     if (dir.length() > 0) {

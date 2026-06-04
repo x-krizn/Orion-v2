@@ -70,3 +70,14 @@ export interface ModelAssetInfo {
   filePath?: string;
   meshCount: number;
 }
+
+export interface GameplayAction {
+  id: string;
+  name: string;
+  duration: number; // in seconds
+  elapsed: number;  // in seconds
+  cancelable: boolean;
+  type: "reload" | "channel" | "charge" | "interaction" | "skill" | "spell" | "activation" | "stance_change";
+  onCancel?: () => void;
+  onComplete?: () => void;
+}

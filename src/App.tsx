@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
+import { Vector3, Matrix } from "@babylonjs/core";
 import {
   Cpu,
   Activity,
@@ -23,11 +24,20 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Lock,
+  Unlock,
+  Settings,
+  Shield,
+  Heart,
+  Move,
+  Target,
 } from "lucide-react";
 import { GameManager } from "./game/game/GameManager";
 import { PerformanceStats, ModelAssetInfo } from "./game/types";
 import { SandboxConfigPanel } from "./components/SandboxConfigPanel";
 import { FXWorkbenchPanel } from "./components/FXWorkbenchPanel";
+// @ts-ignore
+import menuBackgroundUrl from "./assets/images/menu_background_1780583746459.png";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -54,11 +64,22 @@ export default function App() {
   const [selectedLibraryItem, setSelectedLibraryItem] = useState<string | null>(null);
   const [placementMode, setPlacementMode] = useState<boolean>(false);
 
+  // Navigation / Game state: "menu" | "training" | "editor" | "options"
+  const [gameState, setGameState] = useState<"menu" | "training" | "editor" | "options">(() => {
+    const urlParams = new URL(window.location.href).searchParams;
+    return urlParams.get("mode") === "edit" ? "editor" : "menu";
+  });
+
   // App mode: whether we are playing or editing
-  const [appMode] = useState<"play" | "edit">(() => {
+  const [appMode, setAppMode] = useState<"play" | "edit">(() => {
     const urlParams = new URL(window.location.href).searchParams;
     return urlParams.get("mode") === "edit" ? "edit" : "play";
   });
+
+  // Custom keyword query input state
+  const [showEditorAuth, setShowEditorAuth] = useState<boolean>(false);
+  const [authKeyword, setAuthKeyword] = useState<string>("");
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // PWA installer hooks
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -124,6 +145,18 @@ export default function App() {
   const [showTelemetry, setShowTelemetry] = useState<boolean>(true);
   const [showFXWorkbench, setShowFXWorkbench] = useState<boolean>(false);
 
+  // Souls inspired Layout states
+  const [layoutUnlocked, setLayoutUnlocked] = useState<boolean>(false);
+
+  useEffect(() => {
+    setLayoutUnlocked(appMode === "edit");
+  }, [appMode]);
+  const [joystickOffset, setJoystickOffset] = useState({ x: 0, y: 0 });
+  const [actionsOffset, setActionsOffset] = useState({ x: 0, y: 0 });
+  const [joystickSize, setJoystickSize] = useState<number>(1.0);
+  const [actionsSize, setActionsSize] = useState<number>(1.0);
+  const [selectedTheme, setSelectedTheme] = useState<string>("cyber");
+
   // Dynamic loaded game database states
   const [weapons, setWeapons] = useState<any[]>([]);
   const [abilities, setAbilities] = useState<any[]>([]);
@@ -140,12 +173,18 @@ export default function App() {
   // Touch joystick mechanical controls
   const joystickBoundRef = useRef<HTMLDivElement | null>(null);
   const joystickKnobRef = useRef<HTMLDivElement | null>(null);
+  const joystickPointerIdRef = useRef<number | null>(null);
   const [isDraggingJoystick, setIsDraggingJoystick] = useState(false);
 
   useEffect(() => {
-    if (!canvasRef.current) return;
+    if (!canvasRef.current || gameState === "menu" || gameState === "options") {
+      gameManagerRef.current = null;
+      return;
+    }
 
-    // Instantiate game coordinator
+    // Instantiate game coordinator with optional large arena for training
+    const arenaSizeOverride = gameState === "training" ? 150 : undefined;
+
     const gm = new GameManager(
       canvasRef.current,
       (assets) => {
@@ -159,7 +198,8 @@ export default function App() {
           setSelectedLibraryItem(null);
           setPlacementMode(false);
         }
-      }
+      },
+      arenaSizeOverride
     );
 
     // Bind data loading listeners to React state
@@ -192,9 +232,10 @@ export default function App() {
 
     return () => {
       gm.dispose();
+      gameManagerRef.current = null;
       window.removeEventListener("keydown", blockKeys);
     };
-  }, []);
+  }, [gameState, appMode]);
 
   // Synchronize placement tracking states
   useEffect(() => {
@@ -208,6 +249,165 @@ export default function App() {
       gameManagerRef.current.placementModeActive = placementMode;
     }
   }, [placementMode]);
+
+  // ----------------------------------------------------
+  // Dynamic Real-time HUD projection & Resource Update Tick
+  // ----------------------------------------------------
+  useEffect(() => {
+    let frameId: number;
+    const updateTick = () => {
+      const gm = gameManagerRef.current;
+      if (gm && gm.player && gm.scene && gm.scene.activeCamera) {
+        const player = gm.player;
+        const playerPos = player.getPosition();
+        
+        // A. Process player resource bars (HP, EN, Heat, Armor) across all active HUD layout modes
+        const updateFillAndText = (fillId: string, textId: string, ratio: number, textString: string, activeClassName?: string) => {
+          const fillEl = document.getElementById(fillId);
+          const textEl = document.getElementById(textId);
+          if (fillEl) {
+            fillEl.style.width = `${Math.max(0, Math.min(1.0, ratio)) * 100}%`;
+            if (activeClassName) {
+              fillEl.className = activeClassName;
+            }
+          }
+          if (textEl) textEl.innerText = textString;
+        };
+
+        const hpRatio = player.hp / player.maxHp;
+        const hpStr = `HP: ${Math.ceil(player.hp)} / ${player.maxHp}`;
+        updateFillAndText("topHudHpFill", "topHudHpText", hpRatio, hpStr);
+        updateFillAndText("deckHudHpFill", "deckHudHpText", hpRatio, hpStr);
+        updateFillAndText("mobileHpFill", "mobileHpText", hpRatio, hpStr);
+
+        const armorRatio = player.armor / player.maxArmor;
+        const armorStr = `ARMOR: ${Math.ceil(player.armor)} / ${player.maxArmor}`;
+        updateFillAndText("topHudArmorFill", "topHudArmorText", armorRatio, armorStr);
+        updateFillAndText("deckHudArmorFill", "deckHudArmorText", armorRatio, armorStr);
+
+        const enRatio = player.en / player.maxEn;
+        const enStr = `EN: ${Math.ceil(player.en)} / ${player.maxEn}`;
+        updateFillAndText("topHudEnFill", "topHudEnText", enRatio, enStr);
+        updateFillAndText("deckHudEnFill", "deckHudEnText", enRatio, enStr);
+        updateFillAndText("mobileEnFill", "mobileEnText", enRatio, enStr);
+
+        const heatRatio = player.heat / player.maxHeat;
+        const heatStr = player.isOverheated ? "OVERHEAT" : `HEAT: ${Math.ceil(player.heat)}%`;
+        const heatClass = player.isOverheated
+          ? "h-full bg-red-650 animate-pulse transition-all duration-75 relative"
+          : "h-full bg-orange-500 transition-all duration-75 relative";
+        
+        updateFillAndText("topHudHeatFill", "topHudHeatText", heatRatio, heatStr, heatClass);
+        updateFillAndText("deckHudHeatFill", "deckHudHeatText", heatRatio, heatStr, heatClass);
+        updateFillAndText("mobileHeatFill", "mobileHeatText", heatRatio, heatStr, heatClass);
+        
+        // B. Mobile floating HUD projection near player
+        const mobileHud = document.getElementById("mobilePlayerFloatingHUD");
+        if (mobileHud) {
+          const engine = gm.scene.getEngine();
+          const offsetPos = playerPos.clone();
+          offsetPos.y += 2.2; // float offset
+          
+          const projected = Vector3.Project(
+            offsetPos,
+            Matrix.IdentityReadOnly,
+            gm.scene.getTransformMatrix(),
+            gm.scene.activeCamera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight())
+          );
+          
+          mobileHud.style.left = `${projected.x}px`;
+          mobileHud.style.top = `${projected.y}px`;
+          mobileHud.style.transform = "translate(-50%, -100%)";
+          
+          const mHp = document.getElementById("mobileHpFill");
+          const mEn = document.getElementById("mobileEnFill");
+          const mHeat = document.getElementById("mobileHeatFill");
+          
+          if (mHp) mHp.style.width = `${Math.max(0, Math.min(1.0, player.hp / player.maxHp)) * 100}%`;
+          if (mEn) mEn.style.width = `${Math.max(0, Math.min(1.0, player.en / player.maxEn)) * 100}%`;
+          if (mHeat) {
+            mHeat.style.width = `${Math.max(0, Math.min(1.0, player.heat / player.maxHeat)) * 100}%`;
+            mHeat.className = player.isOverheated ? "h-1 bg-red-500 animate-pulse-fast" : "h-1 bg-orange-400";
+          }
+        }
+        
+        // C. Generate coordinate projection markers (Target Brackets & Offscreen warnings)
+        const lockContainer = document.getElementById("hudLockTargetsLayer");
+        if (lockContainer) {
+          let hudHTML = "";
+          const engine = gm.scene.getEngine();
+          const viewportGlobal = gm.scene.activeCamera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
+          
+          const maxW = engine.getRenderWidth();
+          const maxH = engine.getRenderHeight();
+
+          gm.spawnedEnemies.forEach(enemy => {
+            const enemyPos = enemy.node.position;
+            const projected = Vector3.Project(
+              enemyPos,
+              Matrix.IdentityReadOnly,
+              gm.scene.getTransformMatrix(),
+              viewportGlobal
+            );
+
+            const inFront = projected.z > 0 && projected.z < 1.0;
+            const onScreen = projected.x >= 0 && projected.x <= maxW && projected.y >= 0 && projected.y <= maxH;
+
+            if (!onScreen || !inFront) {
+              // Off-screen threat direction math
+              const vectorX = projected.x - maxW / 2;
+              const vectorY = projected.y - maxH / 2;
+              const angle = Math.atan2(vectorY, vectorX);
+              const margin = 60;
+              const arrowX = Math.max(margin, Math.min(maxW - margin, maxW / 2 + Math.cos(angle) * (maxW / 2 - margin)));
+              const arrowY = Math.max(margin, Math.min(maxH - margin, maxH / 2 + Math.sin(angle) * (maxH / 2 - margin)));
+              const dist = Vector3.Distance(playerPos, enemyPos);
+              
+              hudHTML += `
+                <div class="absolute text-red-500 font-mono text-[9px] pointer-events-none flex flex-col items-center justify-center -translate-x-1/2 -translate-y-1/2" style="left: ${arrowX}px; top: ${arrowY}px; text-shadow: 0 0 4px rgba(0,0,0,0.85);">
+                  <span class="animate-bounce font-bold">⚠️</span>
+                  <span class="text-[8px] bg-slate-900/90 text-red-400 font-bold px-1 border border-red-500/20 rounded">${dist.toFixed(0)}m</span>
+                </div>
+              `;
+            } else {
+              // On screen locking brackets
+              const dist = Vector3.Distance(playerPos, enemyPos);
+              const isLocked = gm.lockedTargets.find(lt => lt.enemy === enemy);
+              const progress = isLocked ? isLocked.progress : 0;
+              const fullyLocked = isLocked && progress >= 1.0;
+
+              const borderCol = fullyLocked 
+                ? "border-red-500/95 text-red-500 drop-shadow-[0_0_4px_rgba(239,68,68,0.5)]" 
+                : (isLocked ? "border-yellow-500/80 text-yellow-400" : "border-slate-500/30 text-slate-400/60");
+                
+              const size = fullyLocked ? "w-16 h-16 scale-110" : "w-14 h-14 animate-pulse";
+              
+              const tag = fullyLocked 
+                ? `<span class="bg-red-900/90 text-white border border-red-500 text-[8px] px-1 font-bold rounded uppercase">LOCKED</span>` 
+                : (isLocked 
+                  ? `<span class="bg-yellow-900/85 text-yellow-300 border border-yellow-500/30 text-[7px] px-1 rounded">LOCKING ${(progress * 100).toFixed(0)}%</span>` 
+                  : `<span class="bg-slate-900/65 text-slate-400 text-[7px] px-1 rounded">DETECTED</span>`);
+
+              hudHTML += `
+                <div class="absolute pointer-events-none flex flex-col items-center -translate-x-1/2 -translate-y-1/2 transition-transform duration-75" style="left: ${projected.x}px; top: ${projected.y}px;">
+                  <div class="${size} border-2 border-dashed ${borderCol} rounded relative flex items-center justify-center">
+                    <span class="text-[7px] tracking-tight font-mono absolute -top-4 px-1 bg-[#121217]/90 text-slate-300 rounded border border-white/5 opacity-80">${enemy.data.name}</span>
+                    <span class="text-[9px] font-mono leading-none tracking-wider font-bold">${dist.toFixed(0)}m</span>
+                    ${fullyLocked ? `<span class="absolute -bottom-4 text-[7px] text-red-400 font-extrabold tracking-tighter bg-black/80 px-1 rounded border border-red-500/20">HP ${Math.ceil(enemy.health)}</span>` : ''}
+                  </div>
+                  <div class="mt-1 flex gap-1 items-center justify-center">${tag}</div>
+                </div>
+              `;
+            }
+          });
+          lockContainer.innerHTML = hudHTML;
+        }
+      }
+      frameId = requestAnimationFrame(updateTick);
+    };
+    frameId = requestAnimationFrame(updateTick);
+    return () => cancelAnimationFrame(frameId);
+  }, []);
 
   // Sync state togglers
   const handleThemeChange = (newTheme: "cyber" | "magma" | "wasteland" | "matrix") => {
@@ -277,6 +477,58 @@ export default function App() {
     setCollisionRadius(0.7);
   };
 
+  const handleAuthSubmit = () => {
+    if (authKeyword.trim().toLowerCase() === "brakes") {
+      setGameState("editor");
+      setAppMode("edit");
+      setShowEditorAuth(false);
+      setAuthKeyword("");
+      setAuthError(null);
+    } else {
+      setAuthError("QUANTUM KEY UNRECOGNIZED");
+    }
+  };
+
+  const handleSpawnEnemy = (enemyId: string) => {
+    const gm = gameManagerRef.current;
+    if (!gm || !gm.player) return;
+
+    const transformNode = gm.player.getRootNode();
+    const forward = transformNode.forward;
+    const playerPos = gm.player.getPosition();
+
+    // Spawn 12 meters in front of the player along their forward vector with minor offset spread
+    const spawnPos = playerPos.add(forward.scale(12));
+    spawnPos.x += (Math.random() - 0.5) * 4;
+    spawnPos.z += (Math.random() - 0.5) * 4;
+    spawnPos.y = 0;
+
+    gm.spawnEnemyAt(enemyId, spawnPos);
+    gm.fx.spawnExplosion(spawnPos, 8, 0.6);
+  };
+
+  const handleClearEnemies = () => {
+    const gm = gameManagerRef.current;
+    if (!gm) return;
+
+    gm.spawnedEnemies.forEach((e) => {
+      e.node.dispose();
+    });
+    gm.spawnedEnemies = [];
+    gm.lockedTargets = [];
+
+    // Trigger explosive area-cleared shockwave
+    if (gm.player) {
+      const pPos = gm.player.getPosition();
+      gm.fx.spawnExplosion(pPos, 20, 1.2);
+    }
+  };
+
+  const handleExitToMenu = () => {
+    setGameState("menu");
+    setAppMode("play");
+  };
+
   // Precision alignments update loop
   useEffect(() => {
     if (gameManagerRef.current) {
@@ -340,44 +592,90 @@ export default function App() {
   };
 
   // ----------------------------------------------------
-  // Virtual Joysticks drag logic
+  // Draggable HUD & Layout drag logic
   // ----------------------------------------------------
-  const handleJoystickTouchStart = (e: React.TouchEvent | React.MouseEvent) => {
+  const [activeDragTarget, setActiveDragTarget] = useState<"joystick" | "actions" | null>(null);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+  const initialOffsetRef = useRef({ x: 0, y: 0 });
+
+  const handleDragStart = (target: "joystick" | "actions", e: React.MouseEvent | React.TouchEvent) => {
+    if (!layoutUnlocked) return;
+    e.stopPropagation();
+    setActiveDragTarget(target);
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    
+    dragStartRef.current = { x: clientX, y: clientY };
+    initialOffsetRef.current = target === "joystick" ? { ...joystickOffset } : { ...actionsOffset };
+  };
+
+  const handleDragMoveRelative = (e: React.MouseEvent | React.TouchEvent) => {
+    if (!activeDragTarget) return;
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    
+    const dx = clientX - dragStartRef.current.x;
+    const dy = clientY - dragStartRef.current.y;
+    
+    if (activeDragTarget === "joystick") {
+      setJoystickOffset({
+        x: initialOffsetRef.current.x + dx,
+        y: initialOffsetRef.current.y - dy // y screen is inverted from bottom
+      });
+    } else if (activeDragTarget === "actions") {
+      setActionsOffset({
+        x: initialOffsetRef.current.x - dx, // right-aligned invert
+        y: initialOffsetRef.current.y - dy
+      });
+    }
+  };
+
+  const handleDragEndRelative = () => {
+    setActiveDragTarget(null);
+  };
+
+  // ----------------------------------------------------
+  // Virtual Joysticks drag logic (using Pointer Events for flawless multitouch)
+  // ----------------------------------------------------
+  const handleJoystickPointerDown = (e: React.PointerEvent) => {
+    if (layoutUnlocked) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const target = e.currentTarget as HTMLDivElement;
+    target.setPointerCapture(e.pointerId);
+    joystickPointerIdRef.current = e.pointerId;
     setIsDraggingJoystick(true);
     updateJoystickPos(e);
   };
 
-  const handleJoystickTouchMove = (e: React.TouchEvent | React.MouseEvent) => {
-    if (!isDraggingJoystick) return;
+  const handleJoystickPointerMove = (e: React.PointerEvent) => {
+    if (!isDraggingJoystick || e.pointerId !== joystickPointerIdRef.current) return;
     updateJoystickPos(e);
   };
 
-  const handleJoystickTouchEnd = () => {
+  const handleJoystickPointerUpOrCancel = (e: React.PointerEvent) => {
+    if (e.pointerId !== joystickPointerIdRef.current) return;
+    releaseJoystick();
+  };
+
+  const releaseJoystick = () => {
     setIsDraggingJoystick(false);
+    joystickPointerIdRef.current = null;
     if (joystickKnobRef.current) {
       joystickKnobRef.current.style.transform = `translate(0px, 0px)`;
     }
     gameManagerRef.current?.input.handleJoystickUpdate(0, 0, false);
   };
 
-  const updateJoystickPos = (e: React.TouchEvent | React.MouseEvent) => {
+  const updateJoystickPos = (e: React.PointerEvent) => {
     if (!joystickBoundRef.current || !joystickKnobRef.current) return;
 
     const boundRect = joystickBoundRef.current.getBoundingClientRect();
     const boundCenterX = boundRect.left + boundRect.width / 2;
     const boundCenterY = boundRect.top + boundRect.height / 2;
 
-    let clientX = 0;
-    let clientY = 0;
-
-    if ("touches" in e) {
-      if (e.touches.length === 0) return;
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else {
-      clientX = e.clientX;
-      clientY = e.clientY;
-    }
+    const clientX = e.clientX;
+    const clientY = e.clientY;
 
     const dx = clientX - boundCenterX;
     const dy = clientY - boundCenterY;
@@ -400,8 +698,43 @@ export default function App() {
     gameManagerRef.current?.input.handleJoystickUpdate(normX, normY, true);
   };
 
+  // Helper to bind gameplay action buttons to work flawlessly with multi-touch and mouse clicks simultaneously
+  const bindInputButton = (actionFn: () => void) => {
+    return {
+      onPointerDown: (e: React.PointerEvent) => {
+        if (layoutUnlocked) return;
+        e.preventDefault();
+        e.stopPropagation();
+        actionFn();
+      },
+      onTouchStart: (e: React.TouchEvent) => {
+        if (layoutUnlocked) return;
+        e.preventDefault();
+        e.stopPropagation();
+        actionFn();
+      },
+    };
+  };
+
+  const simulateKey = (key: string, isDown: boolean) => {
+    const event = new KeyboardEvent(isDown ? "keydown" : "keyup", {
+      key: key,
+      code: key === " " ? "Space" : `Key${key.toUpperCase()}`,
+      bubbles: true,
+      cancelable: true
+    });
+    window.dispatchEvent(event);
+  };
+
   return (
-    <div className="relative w-full h-full select-none overflow-hidden bg-[#0a0a0c] text-[#d1d1d6] font-sans" id="appRoot">
+    <div 
+      className="relative w-full h-full select-none overflow-hidden bg-[#0a0a0c] text-[#d1d1d6] font-sans" 
+      id="appRoot"
+      onMouseMove={handleDragMoveRelative}
+      onMouseUp={handleDragEndRelative}
+      onTouchMove={handleDragMoveRelative}
+      onTouchEnd={handleDragEndRelative}
+    >
       
       {/* 3D Render Canvas */}
       <canvas
@@ -410,56 +743,160 @@ export default function App() {
         className="absolute inset-0 w-full h-full block touch-none z-0"
       />
 
+      {/* High-Performance 3D Coordinates Projected Target Tracking Layer */}
+      <div id="hudLockTargetsLayer" className="absolute inset-0 pointer-events-none z-2 overflow-hidden" />
+
+      {/* Dynamic 3D Projected Mobile Player Status Gauge */}
+      <div 
+        id="mobilePlayerFloatingHUD" 
+        className="absolute hidden pointer-events-none z-3 select-none w-32 bg-slate-900/85 backdrop-blur border border-white/10 rounded p-1.5 flex flex-col space-y-1 shadow-2xl shadow-black/80 font-mono"
+      >
+        <div className="flex justify-between items-center text-[8px] font-bold leading-none text-red-500 mb-0.5">
+          <span>HP</span>
+        </div>
+        <div className="w-full bg-black/60 rounded-sm h-[3px] overflow-hidden">
+          <div id="mobileHpFill" className="h-full bg-red-500 transition-all duration-75" style={{ width: '100%' }} />
+        </div>
+
+        <div className="flex justify-between items-center text-[8px] font-bold leading-none text-emerald-400 mb-0.5 mt-0.5">
+          <span>EN</span>
+        </div>
+        <div className="w-full bg-black/60 rounded-sm h-[3px] overflow-hidden">
+          <div id="mobileEnFill" className="h-full bg-emerald-400 transition-all duration-75" style={{ width: '100%' }} />
+        </div>
+
+        <div className="flex justify-between items-center text-[8px] font-bold leading-none text-orange-400 mb-0.5 mt-0.5">
+          <span>HEAT</span>
+        </div>
+        <div className="w-full bg-black/60 rounded-sm h-[3px] overflow-hidden">
+          <div id="mobileHeatFill" className="h-full bg-orange-400 transition-all duration-75" style={{ width: '100%' }} />
+        </div>
+      </div>
+
       {/* Grid Scanline aesthetics overlay */}
       <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0)_50%,rgba(0,0,0,0.6)_100%)] z-1" />
 
       {/* Cybernetic HUD overlay: Header Title info */}
       <header className="absolute top-4 left-4 z-4 flex items-center justify-between pointer-events-none w-[calc(100%-2rem)]">
-        <div className="pointer-events-auto flex items-center space-x-3 cyber-panel py-2 px-4 rounded-md border-white/10 bg-[#0f0f12]/90 backdrop-blur-md">
-          <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-red-600 rounded flex items-center justify-center font-bold text-black text-xs font-mono mr-1 shadow-md shadow-orange-500/20">
-            M.C
-          </div>
-          <div className="flex flex-col">
-            <h1 className="text-sm font-mono font-bold tracking-widest text-white leading-none">2.5D MECH VERTICAL SLICE</h1>
-            <div className="flex items-center gap-2 mt-1.5">
-              <span className="px-1.5 py-0.5 bg-green-500/10 text-green-400 text-[9px] rounded border border-green-500/20 uppercase font-mono font-bold leading-none">
-                System Stable
-              </span>
-              <span className="text-[10px] font-mono text-orange-400 uppercase tracking-tight mr-1">ENG_SYS_ACTIVE</span>
-              <button
-                id="telemetryToggleButton"
-                onClick={() => setShowTelemetry(!showTelemetry)}
-                className="pointer-events-auto px-2 py-0.5 bg-orange-500/20 hover:bg-orange-500/35 border border-orange-500 text-white hover:text-orange-200 text-[9px] rounded font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer"
-              >
-                <Activity className="w-2.5 h-2.5 animate-pulse text-orange-400" />
-                <span>Diagnostics: {showTelemetry ? "ON" : "OFF"}</span>
-              </button>
-              <button
-                id="fxWorkbenchToggleButton"
-                onClick={() => setShowFXWorkbench(!showFXWorkbench)}
-                className={`pointer-events-auto px-2 py-0.5 border text-white text-[9px] rounded font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer leading-none ${
-                  showFXWorkbench
-                    ? "bg-orange-500 hover:bg-orange-600 text-black font-semibold border-orange-500"
-                    : "bg-orange-500/15 hover:bg-orange-500/35 border-orange-500 hover:text-orange-200"
-                }`}
-              >
-                <Sliders className="w-2.5 h-2.5 text-orange-400" />
-                <span>FX Workbench</span>
-              </button>
-              {isInstallable && (
+        {appMode === "edit" ? (
+          <div className="pointer-events-auto flex items-center space-x-3 cyber-panel py-2 px-4 rounded-md border-white/10 bg-[#0f0f12]/90 backdrop-blur-md">
+            <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-red-600 rounded flex items-center justify-center font-bold text-black text-xs font-mono mr-1 shadow-md shadow-orange-500/20">
+              M.C
+            </div>
+            <div className="flex flex-col">
+              <h1 className="text-sm font-mono font-bold tracking-widest text-white leading-none">2.5D MECH VERTICAL SLICE</h1>
+              <div className="flex items-center gap-2 mt-1.5">
+                <span className="px-1.5 py-0.5 bg-green-500/10 text-green-400 text-[9px] rounded border border-green-500/20 uppercase font-mono font-bold leading-none">
+                  System Stable
+                </span>
+                <span className="text-[10px] font-mono text-orange-400 uppercase tracking-tight mr-1">ENG_SYS_ACTIVE</span>
                 <button
-                  id="pwaInstallButton"
-                  onClick={handleInstallClick}
-                  className="pointer-events-auto px-2 py-0.5 bg-blue-500/20 hover:bg-blue-500/35 border border-blue-500 text-white hover:text-blue-200 text-[9px] rounded font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer"
-                  title="Install Mech Combat Sandbox offline client"
+                  id="telemetryToggleButton"
+                  onClick={() => setShowTelemetry(!showTelemetry)}
+                  className="pointer-events-auto px-2 py-0.5 bg-orange-500/20 hover:bg-orange-500/35 border border-orange-500 text-white hover:text-orange-200 text-[9px] rounded font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer"
                 >
-                  <Download className="w-2.5 h-2.5 text-blue-400" />
-                  <span>Install Client</span>
+                  <Activity className="w-2.5 h-2.5 animate-pulse text-orange-400" />
+                  <span>Diagnostics: {showTelemetry ? "ON" : "OFF"}</span>
                 </button>
-              )}
+                {isInstallable && (
+                  <button
+                    id="pwaInstallButton"
+                    onClick={handleInstallClick}
+                    className="pointer-events-auto px-2 py-0.5 bg-blue-500/20 hover:bg-blue-500/35 border border-blue-500 text-white hover:text-blue-200 text-[9px] rounded font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer"
+                    title="Install Mech Combat Sandbox offline client"
+                  >
+                    <Download className="w-2.5 h-2.5 text-blue-400" />
+                    <span>Install Client</span>
+                  </button>
+                )}
+                <button
+                  onClick={handleExitToMenu}
+                  className="pointer-events-auto px-2 py-0.5 bg-red-500/20 hover:bg-red-500/35 border border-red-500 text-rose-350 hover:text-white text-[9px] rounded font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer"
+                  title="Quit to Main Menu"
+                >
+                  <span>Quit Area</span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="pointer-events-auto flex flex-wrap items-center gap-3 md:gap-4 cyber-panel py-1.5 px-3 rounded-md border-white/10 bg-[#0a0a0d]/92 backdrop-blur-md shadow-lg">
+            {/* Collapsed Build version info */}
+            <div className="flex flex-col border-r border-white/10 pr-3">
+              <span className="text-[7px] font-mono text-slate-500 font-bold tracking-wider leading-none uppercase">SYSTEM READY</span>
+              <span className="text-[9px] font-mono font-black text-orange-500 tracking-wide mt-1">BUILD v2.4-STABLE</span>
+            </div>
+
+            {/* Quick Diagnostics Toggle */}
+            <button
+              id="telemetryToggleButton"
+              onClick={() => setShowTelemetry(!showTelemetry)}
+              className="px-1.5 py-0.5 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 text-slate-300 hover:text-white text-[8px] rounded font-mono uppercase transition-all flex items-center gap-1 cursor-pointer"
+              title="Toggle Diagnostic Overlay"
+            >
+              <Activity className="w-2 h-2 animate-pulse text-orange-400" />
+              <span>DIAG: {showTelemetry ? "ON" : "OFF"}</span>
+            </button>
+
+            {gameState === "training" && (
+              <button
+                onClick={handleExitToMenu}
+                className="px-1.5 py-0.5 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-rose-350 hover:text-white text-[8px] rounded font-mono uppercase transition-all flex items-center gap-1 cursor-pointer"
+                title="Exit Training mode and return to main menu"
+              >
+                <span>Quit Area</span>
+              </button>
+            )}
+
+            {/* HP HUD progress bar */}
+            <div className="flex flex-col w-20 leading-none">
+              <div className="flex justify-between items-center text-[8px] font-bold text-red-500 mb-0.5">
+                <span className="flex items-center gap-0.5"><Heart className="w-2 h-2" /> HP</span>
+                <span id="topHudHpText" className="text-[8px] text-red-400">HP: --/--</span>
+              </div>
+              <div className="w-full bg-slate-800 rounded-sm h-[4px] overflow-hidden border border-black/20">
+                <div id="topHudHpFill" className="h-full bg-red-600 w-full transition-all duration-75 relative">
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
+                </div>
+              </div>
+            </div>
+
+            {/* Shield Armor resistance progress bar */}
+            <div className="flex flex-col w-20 leading-none">
+              <div className="flex justify-between items-center text-[8px] font-bold text-sky-450 mb-0.5">
+                <span className="flex items-center gap-0.5"><Shield className="w-2 h-2" /> AM</span>
+                <span id="topHudArmorText" className="text-[8px] text-sky-300">ARMOR: --/--</span>
+              </div>
+              <div className="w-full bg-slate-800 rounded-sm h-[4px] overflow-hidden border border-black/20">
+                <div id="topHudArmorFill" className="h-full bg-sky-500 w-full transition-[#a1e2fc] duration-75 relative">
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
+                </div>
+              </div>
+            </div>
+
+            {/* EN Stamina battery progress bar */}
+            <div className="flex flex-col w-20 leading-none">
+              <div className="flex justify-between items-center text-[8px] font-bold text-emerald-450 mb-0.5">
+                <span className="flex items-center gap-0.5"><Zap className="w-2 h-2" /> EN</span>
+                <span id="topHudEnText" className="text-[8px] text-emerald-300">EN: --</span>
+              </div>
+              <div className="w-full bg-slate-800 rounded-sm h-[4px] overflow-hidden border border-black/20">
+                <div id="topHudEnFill" className="h-full bg-emerald-505 w-full transition-[#66ffb3] duration-75 relative" />
+              </div>
+            </div>
+
+            {/* Thermals Heat progress bar */}
+            <div className="flex flex-col w-16 leading-none">
+              <div className="flex justify-between items-center text-[8px] font-bold text-orange-450 mb-0.5">
+                <span className="flex items-center gap-0.5"><Crosshair className="w-2 h-2" /> HEAT</span>
+                <span id="topHudHeatText" className="text-[8px] text-orange-300">HEAT: --%</span>
+              </div>
+              <div className="w-full bg-slate-800 rounded-sm h-[4px] overflow-hidden border border-black/20">
+                <div id="topHudHeatFill" className="h-full bg-orange-500 w-full transition-all duration-75" />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Drag & Drop Hint Overlay banner */}
         {appMode === "edit" && (
@@ -472,98 +909,307 @@ export default function App() {
         </div>
         )}
       </header>
-
-      {/* Left Bottom Panel: Mobile Touch joystick */}
+      {/* ---------------------------------------------------- */}
+      {/* COMBAT FLIGHT DECK (Unified Retro Gamepad Overlay) */}
+      {/* ---------------------------------------------------- */}
       {showJoystick && (
-        <div className="absolute bottom-6 left-6 z-4 block pointer-events-auto select-none">
-          <div className="flex flex-col items-center space-y-2">
-            <div
-              id="virtualJoystickContainer"
-              ref={joystickBoundRef}
-              onMouseDown={handleJoystickTouchStart}
-              onMouseMove={handleJoystickTouchMove}
-              onMouseUp={handleJoystickTouchEnd}
-              onMouseLeave={handleJoystickTouchEnd}
-              onTouchStart={handleJoystickTouchStart}
-              onTouchMove={handleJoystickTouchMove}
-              onTouchEnd={handleJoystickTouchEnd}
-              className="w-28 h-28 rounded-full border-2 border-orange-500/20 bg-black/60 flex items-center justify-center cursor-crosshair shadow-lg touch-none"
+        <div 
+          onPointerDown={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+          onTouchStart={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+          onTouchMove={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+          onTouchEnd={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+          className={`absolute z-4 select-none pointer-events-auto rounded-2xl p-4 border transition-all ${
+            layoutUnlocked 
+              ? "border-red-500 bg-red-950/30 shadow-[0_0_20px_rgba(239,68,68,0.3)] ring-2 ring-red-500/40" 
+              : "border-zinc-800 bg-[#07070a]/94 backdrop-blur-md shadow-[0_0_30px_rgba(0,0,0,0.95)]"
+          }`}
+          style={{
+            right: '1.5rem',
+            bottom: '1.5rem',
+            transform: `translate(-${actionsOffset.x}px, -${actionsOffset.y}px) scale(${actionsSize})`,
+            transformOrigin: 'bottom right',
+            touchAction: 'none',
+            width: '320px'
+          }}
+        >
+          {layoutUnlocked && (
+            <div 
+              onMouseDown={(e) => handleDragStart("actions", e)}
+              onTouchStart={(e) => handleDragStart("actions", e)}
+              className="absolute -top-6 left-0 right-0 h-5 bg-red-500 text-black text-[9px] font-mono font-black flex items-center justify-between px-2 cursor-move rounded-t-md uppercase select-none animate-pulse"
             >
-              <div
-                id="joystickKnob"
-                ref={joystickKnobRef}
-                className="w-11 h-11 rounded-full bg-gradient-to-tr from-orange-600 to-orange-400 border border-orange-300 shadow-lg select-none pointer-events-none transition-transform duration-75 ease-out"
-              />
+              <div className="flex items-center gap-1">
+                <Move className="w-2.5 h-2.5" />
+                <span>Drag Combat Deck</span>
+              </div>
+              <div className="flex gap-1.5 pointer-events-auto" onMouseDown={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()}>
+                <button 
+                  onClick={() => setActionsSize(Math.max(0.6, actionsSize - 0.1))} 
+                  className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
+                >
+                  -
+                </button>
+                <span className="text-[8px] font-bold">{(actionsSize * 100).toFixed(0)}%</span>
+                <button 
+                  onClick={() => setActionsSize(Math.min(1.8, actionsSize + 0.1))} 
+                  className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
+                >
+                  +
+                </button>
+              </div>
             </div>
-            <span className="text-[10px] font-mono text-orange-500 font-bold tracking-widest">THRUST JOYSTICK</span>
+          )}
+
+          {/* Top Row: D-Pad, Center control rubber pills, Action buttons */}
+          <div className="flex items-center justify-between mt-1 mb-3">
+            
+            {/* 1. Direcional Cross D-Pad */}
+            <div className="flex flex-col items-center">
+              <span className="text-[7px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest text-[#8e8e93]">DIRECTIONAL</span>
+              <div className="relative w-20 h-20 bg-zinc-950/60 border border-zinc-800/80 rounded-full flex items-center justify-center">
+                {/* UP */}
+                <button
+                  {...bindInputButton(() => {})}
+                  onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); simulateKey("w", true); }}
+                  onPointerUp={() => simulateKey("w", false)}
+                  onPointerCancel={() => simulateKey("w", false)}
+                  className="absolute top-0.5 w-[22px] h-[22px] bg-[#1a1a24] border border-zinc-700/60 hover:bg-zinc-800 active:bg-zinc-700 rounded flex items-center justify-center text-[10px] text-slate-300 font-bold shadow active:scale-90 select-none cursor-pointer transition-transform"
+                  title="Move Forward"
+                >
+                  ▲
+                </button>
+                {/* LEFT */}
+                <button
+                  {...bindInputButton(() => {})}
+                  onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); simulateKey("a", true); }}
+                  onPointerUp={() => simulateKey("a", false)}
+                  onPointerCancel={() => simulateKey("a", false)}
+                  className="absolute left-0.5 w-[22px] h-[22px] bg-[#1a1a24] border border-zinc-700/60 hover:bg-zinc-800 active:bg-zinc-700 rounded flex items-center justify-center text-[10px] text-slate-300 font-bold shadow active:scale-90 select-none cursor-pointer transition-transform"
+                  title="Move Left"
+                >
+                  ◀
+                </button>
+                {/* RIGHT */}
+                <button
+                  {...bindInputButton(() => {})}
+                  onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); simulateKey("d", true); }}
+                  onPointerUp={() => simulateKey("d", false)}
+                  onPointerCancel={() => simulateKey("d", false)}
+                  className="absolute right-0.5 w-[22px] h-[22px] bg-[#1a1a24] border border-zinc-700/60 hover:bg-zinc-800 active:bg-zinc-700 rounded flex items-center justify-center text-[10px] text-slate-300 font-bold shadow active:scale-90 select-none cursor-pointer transition-transform"
+                  title="Move Right"
+                >
+                  ▶
+                </button>
+                {/* DOWN */}
+                <button
+                  {...bindInputButton(() => {})}
+                  onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); simulateKey("s", true); }}
+                  onPointerUp={() => simulateKey("s", false)}
+                  onPointerCancel={() => simulateKey("s", false)}
+                  className="absolute bottom-0.5 w-[22px] h-[22px] bg-[#1a1a24] border border-zinc-700/60 hover:bg-zinc-800 active:bg-zinc-700 rounded flex items-center justify-center text-[10px] text-slate-300 font-bold shadow active:scale-90 select-none cursor-pointer transition-transform"
+                  title="Move Backward"
+                >
+                  ▼
+                </button>
+                <div className="w-5 h-5 bg-zinc-950/80 rounded-full border border-zinc-900/40" />
+              </div>
+            </div>
+
+            {/* 2. Middle Row: Two Vertical Pill Buttons (rubber select-start type style) */}
+            <div className="flex flex-col items-center justify-center px-1">
+              <span className="text-[7px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest text-[#8e8e93]">CONTROL</span>
+              <div className="flex flex-col space-y-2.5 items-center bg-zinc-950/40 border border-zinc-900/40 p-1.5 rounded-lg shadow-inner">
+                {/* DIAG (top rectangle/pill) */}
+                <div className="flex flex-col items-center">
+                  <button
+                    onClick={() => setShowTelemetry(!showTelemetry)}
+                    className={`w-3.5 h-8 rounded-full border shadow transition-all cursor-pointer active:scale-90 flex items-center justify-center ${
+                      showTelemetry
+                        ? "bg-cyan-500/20 border-cyan-400 text-cyan-400 font-bold"
+                        : "bg-zinc-800 border-zinc-700 text-zinc-400"
+                    }`}
+                    title="Toggle Telemetry Diagnostics"
+                  >
+                    <span className="text-[6px] font-black uppercase [writing-mode:vertical-lr] rotate-180 select-none tracking-tighter">DIAG</span>
+                  </button>
+                </div>
+                {/* MODE (bottom rectangle/pill) */}
+                <div className="flex flex-col items-center">
+                  <button
+                    {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
+                    className="w-3.5 h-8 rounded-full bg-red-950/40 hover:bg-red-900/30 border border-red-500/50 text-red-400 shadow active:scale-90 flex items-center justify-center transition-all cursor-pointer"
+                    title="Weapon/Matrix Stance Swap"
+                  >
+                    <span className="text-[6px] font-black uppercase [writing-mode:vertical-lr] rotate-180 select-none tracking-tighter text-rose-400">MODE</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. Face Action Buttons (X Y A Diagonal Arc) */}
+            <div className="flex flex-col items-center">
+              <span className="text-[7px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest text-[#8e8e93]">ACTION</span>
+              <div className="relative w-20 h-20 bg-zinc-950/60 border border-zinc-800/80 rounded-full select-none shadow-inner flex items-center justify-center">
+                
+                {/* X Button: Top-Right */}
+                <button
+                  {...bindInputButton(() => gameManagerRef.current?.triggerActionCancel())}
+                  className="absolute top-1 right-1.5 w-6 h-6 rounded-full bg-[#181822] hover:bg-blue-500/20 border border-blue-500/40 hover:border-blue-400 text-blue-400 font-bold text-[9px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
+                  title="Clear / Interrupt Locks (X)"
+                >
+                  X
+                </button>
+
+                {/* Y Button: Middle */}
+                <button
+                  {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
+                  className="absolute top-7 right-7 w-6 h-6 rounded-full bg-[#181822] hover:bg-yellow-500/20 border border-yellow-500/40 hover:border-yellow-400 text-yellow-400 font-bold text-[9px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
+                  title="Stance Swap (Y)"
+                >
+                  Y
+                </button>
+
+                {/* A Button: Bottom-Left */}
+                <button
+                  {...bindInputButton(() => gameManagerRef.current?.triggerContextAction())}
+                  className="absolute bottom-1 left-1.5 w-6 h-6 rounded-full bg-[#181822] hover:bg-emerald-500/20 border border-emerald-500/40 hover:border-emerald-400 text-emerald-400 font-bold text-[9px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
+                  title="Shockwave context trigger (A)"
+                >
+                  A
+                </button>
+              </div>
+            </div>
+
+          </div>
+
+          {/* Bottom Sweep: Curved Shoulder Bumpers and Nested circular B Dash button */}
+          <div className="border-t border-zinc-900 pt-3 mt-1.5 flex flex-col items-center justify-center">
+            <span className="text-[7px] text-zinc-600 font-bold mb-2.5 uppercase tracking-widest">TRIGGER MECHANICS & KINETIC BOOSTER</span>
+            
+            <div className="w-full flex items-center justify-between px-1">
+              
+              {/* Left Wing Shoulder Buttons */}
+              <div className="flex items-center space-x-1">
+                {/* L2 trigger (Rail/Vortex) */}
+                <button
+                  {...bindInputButton(() => gameManagerRef.current?.triggerL2_OffSecondary())}
+                  className="flex flex-col items-center justify-center h-10 w-11 bg-zinc-950/80 hover:bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 rounded-lg hover:text-white transition-all cursor-pointer shadow -rotate-6 transform"
+                  title="Vortex Rail Cannon (L2)"
+                >
+                  <span className="text-[9px] font-black text-white">L2</span>
+                  <span className="text-[5px] font-bold text-cyan-400 uppercase leading-none mt-0.5">RAIL</span>
+                </button>
+
+                {/* L1 trigger (Shield/Parry) */}
+                <button
+                  {...bindInputButton(() => gameManagerRef.current?.triggerL1_OffPrimary())}
+                  className="flex flex-col items-center justify-center h-10 w-11 bg-zinc-950/80 hover:bg-slate-500/10 border border-zinc-700 text-[#d1d1d6] rounded-lg hover:text-white transition-all cursor-pointer shadow -rotate-3 transform"
+                  title="Shield Parry Defend (L1)"
+                >
+                  <span className="text-[9px] font-black text-slate-300">L1</span>
+                  <span className="text-[5px] font-bold text-slate-400 uppercase leading-none mt-0.5">SHLD</span>
+                </button>
+              </div>
+
+              {/* Centered Accelerator B Circle Button (Nestled below triggers gap) */}
+              <div className="flex flex-col items-center -mt-3">
+                <button
+                  {...bindInputButton(() => gameManagerRef.current?.triggerButtonDash())}
+                  className="w-12 h-12 rounded-full bg-gradient-to-tr from-red-600 to-rose-500 hover:from-red-500 hover:to-rose-400 border-2 border-red-400 shadow-[0_0_15px_rgba(239,68,68,0.55)] flex flex-col items-center justify-center active:scale-95 text-white cursor-pointer transition-transform duration-75 shadow-md"
+                  title="Thruster Dash drive (B)"
+                >
+                  <span className="text-xs font-black drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] leading-none mb-0.5">B</span>
+                  <span className="text-[5px] font-extrabold tracking-widest opacity-95 drop-shadow-[0_1px_1px_rgba(0,0,0,0.7)] leading-none text-red-100 uppercase scale-90">DASH</span>
+                </button>
+              </div>
+
+              {/* Right Wing Shoulder Buttons */}
+              <div className="flex items-center space-x-1">
+                {/* R1 trigger (Pulse/Slash) */}
+                <button
+                  {...bindInputButton(() => gameManagerRef.current?.triggerR1_Primary())}
+                  className="flex flex-col items-center justify-center h-10 w-11 bg-orange-950/20 hover:bg-orange-950/40 border border-orange-550/40 text-orange-300 rounded-lg hover:text-white transition-all cursor-pointer shadow rotate-3 transform animate-pulse-slow"
+                  title="Primary Laser Slash (R1)"
+                >
+                  <span className="text-[9px] font-black text-orange-400">R1</span>
+                  <span className="text-[5px] font-bold text-orange-500 uppercase leading-none mt-0.5">PULSE</span>
+                </button>
+
+                {/* R2 trigger (Mortar/Wave) */}
+                <button
+                  {...bindInputButton(() => gameManagerRef.current?.triggerR2_Secondary())}
+                  className="flex flex-col items-center justify-center h-10 w-11 bg-rose-950/20 hover:bg-rose-950/40 border border-rose-550/40 text-rose-300 rounded-lg hover:text-white transition-all cursor-pointer shadow rotate-6 transform"
+                  title="Secondary Heavy Mortar (R2)"
+                >
+                  <span className="text-[9px] font-black text-rose-400">R2</span>
+                  <span className="text-[5px] font-bold text-rose-500 uppercase leading-none mt-0.5">MRTR</span>
+                </button>
+              </div>
+
+            </div>
           </div>
         </div>
       )}
-
-      {/* Right Bottom HUD: Tactical Abilities / Weapon Loadout control deck */}
-      <div className="absolute bottom-6 right-6 z-4 cyber-panel p-3 rounded-lg flex items-center space-x-4 pointer-events-auto shadow-xl bg-[#0f0f12]/90 backdrop-blur-md border-white/10">
-        <div className="flex flex-col items-center justify-center border-r border-[#d1d1d6]/10 pr-3 mr-1">
-          <Zap className="w-5 h-5 text-yellow-400 animate-pulse" />
-          <span className="text-[9px] font-mono text-slate-500 mt-1">LOADOUT</span>
-        </div>
-
-        {/* 1. Standard Plasma Cannons */}
-        <button
-          id="laserWeaponButton"
-          onClick={() => gameManagerRef.current?.input.triggerAbility(0)}
-          className="relative flex flex-col items-center p-2 rounded border border-orange-500/20 hover:border-orange-500 bg-black/60 transition-all text-slate-300 hover:text-orange-300 w-16 cursor-pointer"
-        >
-          <Crosshair className="w-5 h-5 mb-1 text-orange-500" />
-          <span className="text-[9px] font-mono font-bold leading-none">PLASMA</span>
-          <span className="text-[8px] font-mono text-orange-500 mt-1">L-CLICK</span>
-        </button>
-
-        {/* 2. Heavy fusion beam */}
-        <button
-          id="heavyBeamButton"
-          onClick={() => gameManagerRef.current?.input.triggerAbility(1)}
-          className="relative flex flex-col items-center p-2 rounded border border-rose-500/20 hover:border-rose-400 bg-slate-900/60 transition-all text-slate-300 hover:text-rose-200 w-16 cursor-pointer"
-        >
-          <div className="relative">
-            <Zap className="w-5 h-5 mb-1 text-rose-400" />
-          </div>
-          <span className="text-[9px] font-mono font-bold leading-none">RAILBEAM</span>
-          <span className="text-[8px] font-mono text-rose-500 mt-1">Q / 1</span>
-        </button>
-
-        {/* 3. mortar bombardment */}
-        <button
-          id="orbitalBombButton"
-          onClick={() => gameManagerRef.current?.input.triggerAbility(2)}
-          className="relative flex flex-col items-center p-2 rounded border border-amber-500/20 hover:border-amber-400 bg-slate-900/60 transition-all text-slate-300 hover:text-amber-200 w-16 cursor-pointer"
-        >
-          <Sparkles className="w-5 h-5 mb-1 text-amber-400" />
-          <span className="text-[9px] font-mono font-bold leading-none">MORTAR</span>
-          <span className="text-[8px] font-mono text-amber-500 mt-1">E / 2</span>
-        </button>
-
-        {/* 4. Dash propulsion */}
-        <button
-          id="dashAbilityButton"
-          disabled={dashCooldown > 0}
-          onClick={() => gameManagerRef.current?.input.triggerDash()}
-          className={`relative flex flex-col items-center p-2 rounded border w-16 transition-all cursor-pointer ${
-            dashCooldown > 0
-              ? "border-slate-800 bg-[#0f0f12]/40 text-slate-600 cursor-not-allowed"
-              : "border-emerald-500/20 hover:border-emerald-400 bg-slate-900/60 text-slate-300 hover:text-emerald-200"
-          }`}
-        >
-          {dashCooldown > 0 ? (
-            <div className="text-xs font-mono font-bold text-center h-5 flex items-center justify-center text-emerald-400">
-              {dashCooldown.toFixed(1)}s
+        {/* Centered Desktop Resource dashboard (visible on desktop screen ranges in edit mode) */}
+      {appMode === "edit" && (
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-3 pointer-events-auto select-none bg-black/75 backdrop-blur-md rounded-lg border border-white/15 p-2 px-3.5 flex flex-col space-y-1.5 w-72 shadow-2xl shadow-black max-md:hidden font-mono">
+          <div className="flex items-center justify-between border-b border-white/5 pb-1">
+            <div className="flex gap-1.5 items-center">
+              <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+              <span className="text-[9px] font-black text-slate-300 uppercase letter-wider">Mech Combat Suite</span>
             </div>
-          ) : (
-            <RefreshCw className="w-5 h-5 mb-1 text-emerald-400" />
-          )}
-          <span className="text-[9px] font-mono font-bold leading-none">DASH</span>
-          <span className="text-[8px] font-mono text-emerald-500 mt-1">SPACE</span>
-        </button>
-      </div>
+            <span className="text-[8px] text-slate-500">[Souls HUD Edition]</span>
+          </div>
+
+          {/* HP */}
+          <div className="flex flex-col space-y-0.5">
+            <div className="flex justify-between items-center text-[8px] leading-none text-red-500">
+              <span className="flex items-center gap-1 font-bold"><Heart className="w-2.5 h-2.5" /> HP INDEX</span>
+              <span id="deckHudHpText" className="font-bold text-red-400 text-[9px]">HP: -- / --</span>
+            </div>
+            <div className="w-full bg-slate-800/80 rounded-sm h-[6px] overflow-hidden border border-black/20">
+              <div id="deckHudHpFill" className="h-full bg-red-600 w-full transition-all duration-75 relative">
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
+              </div>
+            </div>
+          </div>
+
+          {/* Armor shield */}
+          <div className="flex flex-col space-y-0.5">
+            <div className="flex justify-between items-center text-[8px] leading-none text-sky-400">
+              <span className="flex items-center gap-1 font-bold"><Shield className="w-2.5 h-2.5" /> AM RESISTANCE</span>
+              <span id="deckHudArmorText" className="font-bold text-sky-300 text-[9px]">ARMOR: -- / --</span>
+            </div>
+            <div className="w-full bg-slate-800/80 rounded-sm h-[6px] overflow-hidden border border-black/20">
+              <div id="deckHudArmorFill" className="h-full bg-sky-500 w-full transition-[#a1e2fc] duration-75 relative">
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
+              </div>
+            </div>
+          </div>
+
+          {/* Energy stamina */}
+          <div className="flex flex-col space-y-0.5">
+            <div className="flex justify-between items-center text-[8px] leading-none text-emerald-400">
+              <span className="flex items-center gap-1 font-bold"><Zap className="w-2.5 h-2.5" /> EN ENERGIZER</span>
+              <span id="deckHudEnText" className="font-bold text-emerald-300 text-[9px]">EN: --</span>
+            </div>
+            <div className="w-full bg-slate-800/80 rounded-sm h-[5px] overflow-hidden border border-black/20">
+              <div id="deckHudEnFill" className="h-full bg-emerald-500 w-full transition-[#66ffb3] duration-75 relative" />
+            </div>
+          </div>
+
+          {/* Heat thermal level */}
+          <div className="flex flex-col space-y-0.5">
+            <div className="flex justify-between items-center text-[8px] leading-none text-orange-400">
+              <span className="flex items-center gap-1 font-bold"><Crosshair className="w-2.5 h-2.5" /> HEAT OVERLOAD</span>
+              <span id="deckHudHeatText" className="font-bold text-orange-300 text-[9px]">HEAT: --%</span>
+            </div>
+            <div className="w-full bg-slate-850/80 rounded-sm h-[5px] overflow-hidden border border-black/20">
+              <div id="deckHudHeatFill" className="h-full bg-orange-500 w-full transition-all duration-75" />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Floating Telemetry Diagnostics Overlay */}
       {showTelemetry && (
@@ -1554,6 +2200,242 @@ export default function App() {
           gameManagerRef={gameManagerRef}
           onClose={() => setShowFXWorkbench(false)}
         />
+      )}
+
+      {/* TRAINING COMMAND FLIGHT DECK */}
+      {gameState === "training" && (
+        <div className="absolute top-24 left-4 z-4 select-none pointer-events-auto w-64 p-4 border border-zinc-800 bg-[#0c0c11]/92 backdrop-blur-md rounded-lg shadow-2xl font-mono text-[11px] flex flex-col space-y-3">
+          <div className="flex items-center justify-between border-b border-zinc-850 pb-2 mb-1">
+            <div className="flex items-center space-x-1.5">
+              <span className="w-2 h-2 bg-cyan-400 rounded-full animate-ping" />
+              <span className="text-cyan-400 font-bold uppercase tracking-widest text-xs">TRAINING COMMANDER</span>
+            </div>
+            <button
+              onClick={handleExitToMenu}
+              className="text-[9px] text-zinc-400 hover:text-zinc-200 border border-zinc-700 hover:border-zinc-500 px-1.5 py-0.5 rounded cursor-pointer transition-all uppercase font-semibold"
+            >
+              Quit Area
+            </button>
+          </div>
+
+          <p className="text-[10px] text-[#d1d1d6]/60 leading-normal uppercase">
+            SPAWN PRACTICE FRACTION UNITS INTO ARMORED ARENA AT RANGE 12M:
+          </p>
+
+          <div className="flex flex-col space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
+            {enemies.length > 0 ? (
+              enemies.map((enemy) => (
+                <button
+                  key={enemy.id}
+                  onClick={() => handleSpawnEnemy(enemy.id)}
+                  className="w-full text-left p-2 rounded bg-cyan-950/20 hover:bg-cyan-950/35 border border-cyan-500/20 hover:border-cyan-500/50 text-[#d1d1d6] hover:text-cyan-200 flex items-center justify-between tracking-wide transition-all cursor-pointer font-bold uppercase text-[9px]"
+                >
+                  <span>{enemy.name}</span>
+                  <span className="text-cyan-400">SPAWN</span>
+                </button>
+              ))
+            ) : (
+              <div className="p-3 text-center text-[10px] text-[#d1d1d6]/40 uppercase tracking-tight">
+                No dynamic test frames loaded
+              </div>
+            )}
+          </div>
+
+          <div className="pt-2 border-t border-zinc-850 space-y-1.5">
+            <button
+              onClick={handleClearEnemies}
+              className="w-full p-2 bg-red-950/25 border border-red-500/20 hover:border-red-500/50 text-red-400 hover:text-red-200 rounded text-center transition-all cursor-pointer text-[10px] font-bold uppercase"
+            >
+              💥 Purge Active Hostiles
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* CORE RETRO CYBERPUNK MAIN MENU OVERLAY */}
+      {gameState === "menu" && (
+        <div 
+          className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#07070c] overflow-hidden select-none"
+          style={{
+            backgroundImage: `radial-gradient(circle at center, rgba(0,0,0,0.1) 30%, rgba(7,7,12,0.92) 85%), url(${menuBackgroundUrl})`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+          }}
+        >
+          {/* Scanline CRT simulation */}
+          <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0)_50%,rgba(0,0,0,0.7)_100%)] mix-blend-overlay opacity-80" />
+          <div className="absolute inset-0 pointer-events-none bg-repeat opacity-15" style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='105%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")` }} />
+          <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90.5deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[size:100%_4px,3px_100%] opacity-35 animate-pulse" />
+
+          {/* Center-aligned columns container */}
+          <div className="w-full max-w-5xl px-8 flex flex-col md:grid md:grid-cols-12 gap-8 items-center justify-center py-6">
+            
+            {/* Left Wing: Game Description and Retro-Neon Branding */}
+            <div className="md:col-span-7 flex flex-col items-start space-y-5 text-left">
+              <div className="relative group flex flex-col">
+                <span className="absolute -top-5 left-0 text-[9px] font-mono tracking-[0.3em] text-cyan-400 uppercase font-black animate-pulse">
+                  NEO-BABYLON INDUSTRIAL CO.
+                </span>
+                <h1 className="text-4xl md:text-6xl font-black uppercase tracking-tighter leading-none select-none flex flex-col pt-1">
+                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-400 to-cyan-400 drop-shadow-[0_0_15px_rgba(34,211,238,0.45)]">
+                    PROJECT
+                  </span>
+                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-red-500 via-orange-500 to-rose-500 drop-shadow-[0_0_20px_rgba(239,68,68,0.5)]">
+                    ORION
+                  </span>
+                </h1>
+                <div className="absolute -bottom-2 w-32 h-[2px] bg-gradient-to-r from-rose-500 to-orange-500" />
+                <div className="absolute -bottom-2 w-8 h-[4px] bg-rose-500" />
+              </div>
+
+              <p className="max-w-md text-[10px] font-mono text-[#d1d1d6]/60 leading-normal uppercase tracking-wider pt-3">
+                TACTICAL HARDPOINT SIMULATOR // REG_SYS_v1.0.8<br />
+                PELORUS PILOT MECH SYSTEM ENG_STABLE.<br />
+                WEAPON LOADOUT INTEGRITY REPLICATOR... ACTIVE.
+              </p>
+            </div>
+
+            {/* Right Wing: Selections Array */}
+            <div className="md:col-span-12 md:max-w-none lg:col-span-5 flex flex-col items-stretch justify-center w-full max-w-sm space-y-2.5 bg-black/55 hover:bg-black/65 px-6 py-7 rounded-xl border border-white/5 backdrop-blur-md transition-all">
+              
+              <div className="text-[9px] font-mono text-[#d1d1d6]/40 uppercase tracking-[0.22em] mb-2 text-center border-b border-white/5 pb-2">
+                SYSTEM MODULE DESIGNS
+              </div>
+
+              {/* NEW GAME */}
+              <button
+                disabled
+                className="group relative flex items-center justify-between p-2.5 rounded border border-white/5 bg-white/[0.01] opacity-35 text-white/30 cursor-not-allowed uppercase font-mono text-xs tracking-widest text-left"
+              >
+                <span className="font-bold flex items-center space-x-2">
+                  <span>New</span>
+                </span>
+                <span className="text-[8px] px-1.5 py-0.5 border border-red-500/25 text-red-500/60 font-medium rounded bg-red-950/20">
+                  DISABLED
+                </span>
+              </button>
+
+              {/* LOAD GAME */}
+              <button
+                disabled
+                className="group relative flex items-center justify-between p-2.5 rounded border border-white/5 bg-white/[0.01] opacity-35 text-white/30 cursor-not-allowed uppercase font-mono text-xs tracking-widest text-left"
+              >
+                <span className="font-bold flex items-center space-x-2">
+                  <span>Load</span>
+                </span>
+                <span className="text-[8px] px-1.5 py-0.5 border border-red-500/25 text-red-500/60 font-medium rounded bg-red-950/20">
+                  DISABLED
+                </span>
+              </button>
+
+              {/* TRAINING (Neon Blue/Cyan) */}
+              <button
+                onClick={() => {
+                  setGameState("training");
+                  setAppMode("play");
+                }}
+                className="group relative flex items-center justify-between p-3 rounded border border-cyan-500/40 hover:border-cyan-400 bg-cyan-950/25 hover:bg-cyan-950/45 text-cyan-200 hover:text-white uppercase font-mono text-xs tracking-widest text-left cursor-pointer shadow-[0_0_12px_rgba(6,182,212,0.15)] hover:shadow-[0_0_20px_rgba(6,182,212,0.3)] transition-all"
+              >
+                <span className="font-bold flex items-center space-x-2">
+                  <span className="text-cyan-400 group-hover:translate-x-1 transition-transform">▶</span>
+                  <span className="tracking-widest">Training Mode</span>
+                </span>
+                <span className="text-[8px] px-1.5 py-0.5 border border-cyan-500/35 text-cyan-400 font-black rounded bg-cyan-950/40">
+                  SELECTED
+                </span>
+              </button>
+
+              {/* EDITOR (Orange/Amber with verification code) */}
+              <button
+                onClick={() => {
+                  setShowEditorAuth(true);
+                  setAuthError(null);
+                  setAuthKeyword("");
+                }}
+                className="group relative flex items-center justify-between p-3 rounded border border-orange-500/40 hover:border-orange-400 bg-orange-950/25 hover:bg-orange-950/45 text-orange-200 hover:text-white uppercase font-mono text-xs tracking-widest text-left cursor-pointer shadow-[0_0_12px_rgba(249,115,22,0.15)] hover:shadow-[0_0_20px_rgba(249,115,22,0.3)] transition-all"
+              >
+                <span className="font-bold flex items-center space-x-2">
+                  <span className="text-orange-400 group-hover:translate-x-1 transition-transform">⚙</span>
+                  <span className="tracking-widest">Editor Mode</span>
+                </span>
+                <span className="text-[8px] px-1.5 py-0.5 border border-orange-500/35 text-orange-400 font-bold rounded bg-orange-950/40">
+                  SELECTABLE
+                </span>
+              </button>
+
+              {/* OPTIONS */}
+              <button
+                disabled
+                className="group relative flex items-center justify-between p-2.5 rounded border border-white/5 bg-white/[0.01] opacity-35 text-white/30 cursor-not-allowed uppercase font-mono text-xs tracking-widest text-left"
+              >
+                <span className="font-bold flex items-center space-x-2">
+                  <span>Options</span>
+                </span>
+                <span className="text-[8px] px-1.5 py-0.5 border border-white/10 text-white/40 font-bold rounded bg-white/[0.02]">
+                  SELECTABLE
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Code word auth modal */}
+          {showEditorAuth && (
+            <div className="absolute inset-0 z-50 bg-[#040406]/92 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="flex flex-col space-y-4 p-6 bg-[#0c0c11] border-2 border-orange-500/60 rounded-xl shadow-[0_0_40px_rgba(249,115,22,0.3)] w-full max-w-sm text-center animate-fade-in font-mono border-double">
+                <div className="flex items-center justify-center space-x-1.5 text-orange-400">
+                  <span className="text-sm animate-pulse">✦</span>
+                  <h3 className="text-xs font-bold uppercase tracking-[0.25em]">DEC_KEY AUTHORIZATION</h3>
+                  <span className="text-sm animate-pulse">✦</span>
+                </div>
+                
+                <p className="text-[9px] text-white/50 leading-relaxed uppercase">
+                  CONFIRM QUANTUM KEYWORD DECRYPT KEY TO OVERRIDE SANDBOX SUITE INTEGRATION:
+                </p>
+
+                <div className="space-y-1.5">
+                  <input
+                    type="password"
+                    placeholder="ENTER CODE WORD"
+                    value={authKeyword}
+                    onChange={(e) => {
+                      setAuthKeyword(e.target.value);
+                      setAuthError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleAuthSubmit();
+                    }}
+                    className="w-full bg-black/90 text-orange-400 placeholder-orange-950 border border-orange-500/50 rounded p-2 text-center text-xs tracking-[0.25em] font-bold focus:outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-400 transition-all font-mono uppercase"
+                    autoFocus
+                  />
+                  {authError && (
+                    <div className="text-rose-500 text-[9px] uppercase font-bold tracking-wider bg-rose-950/20 border border-rose-500/30 py-1 rounded animate-pulse">
+                      {authError}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex space-x-3 pt-1">
+                  <button
+                    onClick={() => {
+                      setShowEditorAuth(false);
+                      setAuthKeyword("");
+                      setAuthError(null);
+                    }}
+                    className="w-1/2 p-2 text-[10px] font-bold border border-white/10 hover:border-white/30 text-white/40 hover:text-white uppercase rounded cursor-pointer transition-all rounded-md"
+                  >
+                    Abort
+                  </button>
+                  <button
+                    onClick={handleAuthSubmit}
+                    className="w-1/2 p-2 text-[10px] bg-orange-600 hover:bg-orange-500 text-black border border-orange-500 uppercase rounded cursor-pointer transition-all font-bold rounded-md shadow-md shadow-orange-600/10"
+                  >
+                    Authorize
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
