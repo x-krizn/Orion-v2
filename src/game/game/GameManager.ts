@@ -17,6 +17,8 @@ import {
   TransformNode
 } from "@babylonjs/core";
 import { GameSettings, PerformanceStats, ModelAssetInfo, PlayerInput, GameplayAction } from "../types";
+import { LockState, ActionState, HitReactionTier, StatusEffectType } from "../combat/CombatTypes";
+import { COMBAT_TUNABLES } from "../combat/CombatConfig";
 import { InputController } from "../input/InputController";
 import { IsometricCamera } from "../camera/IsometricCamera";
 import { EnvironmentManager } from "../rendering/EnvironmentManager";
@@ -198,6 +200,13 @@ export class GameManager {
     this.player.onThemeColorDetected = (color) => {
       this.fx.setThemeColors(color);
     };
+
+    // Bind universal cancel callback
+    if (this.input) {
+      this.input.onCancelPressed = () => {
+        this.player.cancelCurrentAction();
+      };
+    }
 
     // Feed player shadow triggers
     const shadowGenerator = this.environment.getShadowGenerator();
@@ -1016,6 +1025,22 @@ export class GameManager {
     } else {
       const pointerPt = this.get3DWorldPointerPos();
       this.player.setAimPoint(pointerPt);
+    }
+
+    // 3.5 Synchronize Lock States into Combat State Machine
+    if (this.lockedTargets.length > 0) {
+      const lt = this.lockedTargets[0];
+      if (lt.progress >= 1.0) {
+        this.player.combatState.lockState = LockState.LOCKED;
+      } else {
+        this.player.combatState.lockState = LockState.ACQUIRING;
+      }
+      this.player.combatState.lockTargetId = lt.enemy.node.id || "EnemyTarget";
+      this.player.combatState.lockProgress = lt.progress;
+    } else {
+      this.player.combatState.lockState = LockState.NO_LOCK;
+      this.player.combatState.lockTargetId = null;
+      this.player.combatState.lockProgress = 0;
     }
 
     // Update Player & follow camera

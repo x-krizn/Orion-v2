@@ -18,6 +18,9 @@ import {
 import { GameSettings, PlayerInput, GameplayAction } from "../types";
 import { FXSystem } from "../fx/FXSystem";
 import { SocketManager } from "../rendering/SocketManager";
+import { CombatEntityState, HitReactionTier, StatusEffectType, ActionState } from "../combat/CombatTypes";
+import { CombatEngine } from "../combat/CombatEngine";
+import { COMBAT_TUNABLES, COMBAT_ACTIONS } from "../combat/CombatConfig";
 
 export class CharacterController {
   private scene: Scene;
@@ -45,6 +48,9 @@ export class CharacterController {
   public isOverheated = false;
   private timeSinceDamage = 0;
 
+  // Unified combat state
+  public combatState!: CombatEntityState;
+
   // Unified Action-State Framework
   public currentAction: GameplayAction | null = null;
   public stance: "standard" | "powerstance" = "standard";
@@ -58,6 +64,21 @@ export class CharacterController {
       this.cancelCurrentAction();
     }
     this.currentAction = { ...action, elapsed: 0 };
+    
+    // Sync with Combat State Machine
+    this.combatState.actionState = ActionState.ACTIVE;
+    const combatAction = COMBAT_ACTIONS[action.id] || {
+      id: action.id,
+      name: action.name,
+      startup: 0,
+      active: action.duration,
+      recovery: 0,
+      cancelable: action.cancelable,
+      poiseValue: 20
+    };
+    this.combatState.currentAction = combatAction;
+    this.combatState.actionPhaseTimer = action.duration;
+
     console.log(`[Action State]: Started action "${action.name}" (${action.type}) duration ${action.duration}s`);
     return true;
   }
@@ -71,6 +92,11 @@ export class CharacterController {
       console.log(`[Action Cancel]: Interrupted running action "${this.currentAction.name}" successfully.`);
       this.currentAction.onCancel?.();
       this.currentAction = null;
+      
+      // Sync combat state cancel
+      this.combatState.actionState = ActionState.NEUTRAL;
+      this.combatState.currentAction = null;
+      this.combatState.actionPhaseTimer = 0;
       return true;
     }
     return false;
@@ -146,6 +172,9 @@ export class CharacterController {
 
     this.rootNode = new TransformNode("PlayerMechRoot", this.scene);
     this.rootNode.position.set(0, 0, 0);
+
+    // Initialize core combat state variables
+    this.combatState = CombatEngine.createDefaultCombatState(true);
 
     this.buildProceduralMech();
   }
@@ -681,28 +710,37 @@ export class CharacterController {
    * Physical loop computation. Takes raw inputs and computes responsive, snapping movement
    */
   public update(deltaTimeSeconds: number, input: PlayerInput, fx?: FXSystem, obstacles?: Mesh[]): void {
-    // Process Souls-mech resource metrics
-    this.timeSinceDamage += deltaTimeSeconds;
-    
-    // Shield/Armor regeneration
-    if (this.timeSinceDamage > 3.5 && this.armor < this.maxArmor) {
-      this.armor = Math.min(this.maxArmor, this.armor + deltaTimeSeconds * 15.0);
-    }
-    
-    // EN regeneration
-    if (this.en < this.maxEn) {
-      this.en = Math.min(this.maxEn, this.en + deltaTimeSeconds * 25.0);
-    }
-    
-    // Heat cooling decay
-    if (this.isOverheated) {
-      this.heat = Math.max(0, this.heat - deltaTimeSeconds * 28.0);
-      if (this.heat <= 0) {
-        this.isOverheated = false;
-        console.log("[Combat Warning]: System cooled and stabilized!");
+    // Process Combat Core dynamic metrics
+    CombatEngine.updateCombatState(this.combatState, deltaTimeSeconds, (ov) => {
+      this.isOverheated = ov;
+    });
+
+    // Synchronize older visual properties in real-time
+    this.hp = this.combatState.hp;
+    this.maxHp = this.combatState.maxHp;
+    this.en = this.combatState.en;
+    this.maxEn = this.combatState.maxEn;
+    this.heat = this.combatState.heat;
+    this.maxHeat = this.combatState.maxHeat;
+    this.armor = this.combatState.armor;
+    this.maxArmor = this.combatState.maxArmor;
+    this.isOverheated = this.combatState.isOverheated;
+
+    this.timeSinceDamage = this.combatState.timeSinceDamage;
+
+    // Check if combat action needs to sync completion
+    if (this.currentAction) {
+      if (this.combatState.currentAction === null) {
+        // Complete current action
+        const completed = this.currentAction;
+        this.currentAction = null;
+        console.log(`[Combat State Sync]: Unified Action Completed: "${completed.name}"`);
+        if (completed.onComplete) {
+          completed.onComplete();
+        }
+      } else {
+        this.currentAction.elapsed = this.currentAction.duration - this.combatState.actionPhaseTimer;
       }
-    } else if (this.heat > 0) {
-      this.heat = Math.max(0, this.heat - deltaTimeSeconds * 20.0);
     }
 
     // 1. Process cooldown timers
@@ -710,37 +748,44 @@ export class CharacterController {
       this.dashCooldownTimer -= deltaTimeSeconds;
     }
 
-    // Process gameplay actions ticking
-    if (this.currentAction) {
-      this.currentAction.elapsed += deltaTimeSeconds;
-      if (this.currentAction.elapsed >= this.currentAction.duration) {
-        const completed = this.currentAction;
-        this.currentAction = null;
-        console.log(`[Action Complete]: Unified Action Completed: "${completed.name}"`);
-        if (completed.onComplete) {
-          completed.onComplete();
-        }
-      }
-    }
-
-    // Process status effects
-    if (this.statusEffectRemainingTimer > 0) {
-      this.statusEffectRemainingTimer -= deltaTimeSeconds;
-      if (this.statusEffectRemainingTimer <= 0) {
-        this.activeStatusEffect = null;
-        console.log("[DataManager]: Status effect expired on character.");
-      } else if (fx && this.activeStatusEffect) {
+    // Process status effects timers and UI synchronization
+    if (this.combatState.activeEffects.length > 0) {
+      this.activeStatusEffect = this.combatState.activeEffects[0];
+      this.statusEffectRemainingTimer = this.activeStatusEffect.duration;
+      
+      if (fx) {
         // Periodically emit active color-themed particles
         if (Math.random() < 0.25) {
-          const auraColor = this.activeStatusEffect.particleColor;
+          // Color based on active status effect type
+          let auraColor = new Color3(0, 0.94, 1.0);
+          switch(this.activeStatusEffect.type) {
+            case StatusEffectType.BURN:
+              auraColor = new Color3(1.0, 0.3, 0.0);
+              break;
+            case StatusEffectType.SHOCK:
+              auraColor = new Color3(0.9, 0.9, 0.1);
+              break;
+            case StatusEffectType.CORRUPTION:
+              auraColor = new Color3(0.5, 0.0, 0.8);
+              break;
+            case StatusEffectType.BLEED:
+              auraColor = new Color3(0.8, 0.0, 0.0);
+              break;
+            case StatusEffectType.SLOW:
+              auraColor = new Color3(0.3, 0.3, 0.5);
+              break;
+          }
           const auraPos = this.rootNode.position.add(new Vector3(
             (Math.random() - 0.5) * 1.6,
             0.1 + Math.random() * 1.8,
             (Math.random() - 0.5) * 1.6
           ));
-          fx.spawnBoosterTrail(auraPos, new Vector3(0, 0.4, 0), true);
+          fx.spawnHitImpact(auraPos);
         }
       }
+    } else {
+      this.activeStatusEffect = null;
+      this.statusEffectRemainingTimer = 0;
     }
 
     // 2. Pulse emissive rings over time index
@@ -998,43 +1043,57 @@ export class CharacterController {
   }
 
   public takeDamage(amount: number): void {
-    this.timeSinceDamage = 0;
+    // Delegate to standard high-fidelity coordinate-based combat resolution pipeline
+    this.takeDamageFromPosition(amount, amount * 0.5, this.getPosition().add(new Vector3(0, 0, 2)));
+  }
+
+  public takeDamageFromPosition(amount: number, impact: number, attackerPos: Vector3): void {
     this.triggerImpactFlash();
     
     // 1. Parry Check: 100% damage deflection
     if (this.currentAction && this.currentAction.id === "parry_action") {
       console.log("[Parry Triggered]: Successful parry! Deflected all incoming damage.");
       this.currentAction = null; // Consume parry frame commitment
+      this.combatState.currentAction = null;
+      this.combatState.actionState = ActionState.NEUTRAL;
       return;
     }
 
-    // 2. Shield Block Check: 80% damage reduction
-    if (this.currentAction && this.currentAction.id === "aegis_block") {
-      const blockedAmount = amount * 0.2;
-      console.log(`[Shield Block]: Aegis Barrier absorbed damage! Reduced ${amount.toFixed(0)} to ${blockedAmount.toFixed(0)}`);
-      amount = blockedAmount;
-    }
+    // 2. Resolve via standard combat pipeline
+    const mockAttackerState = CombatEngine.createDefaultCombatState(false);
     
-    // Shield/Armor absorbs 100% of the damage if active
-    if (this.armor > 0) {
-      const absorbed = Math.min(this.armor, amount);
-      this.armor -= absorbed;
-      amount -= absorbed;
-    }
-    
-    if (amount > 0) {
-      this.hp = Math.max(0, this.hp - amount);
+    const result = CombatEngine.resolveDamagePipeline(
+      mockAttackerState,
+      attackerPos,
+      this.combatState,
+      this.getPosition(),
+      this.rootNode.rotation.y,
+      amount,
+      impact
+    );
+
+    // Sync old states
+    this.hp = this.combatState.hp;
+    this.armor = this.combatState.armor;
+    this.isOverheated = this.combatState.isOverheated;
+
+    if (result.actionInterrupted) {
+      console.log(`[Action Interrupt]: Player action was interrupted!`);
+      this.currentAction = null;
     }
   }
 
   public increaseHeat(amount: number): boolean {
-    if (this.isOverheated) return true;
-    this.heat = Math.min(this.maxHeat, this.heat + amount);
-    if (this.heat >= this.maxHeat) {
+    if (this.combatState.isOverheated) return true;
+    this.combatState.heat = Math.min(this.combatState.maxHeat, this.combatState.heat + amount);
+    if (this.combatState.heat >= this.combatState.maxHeat) {
+      this.combatState.isOverheated = true;
+      this.combatState.overheatCooldownTimer = COMBAT_TUNABLES.heatOverheatRecoverySecs;
       this.isOverheated = true;
-      console.log("[Combat Warning]: System OVERHEAT! Weapons lock is active!");
+      console.log("[Combat Warning]: System OVERHEAT! Coolant process engaged.");
     }
-    return this.isOverheated;
+    this.heat = this.combatState.heat;
+    return this.combatState.isOverheated;
   }
 
   public getDashCooldownProgress(): number {

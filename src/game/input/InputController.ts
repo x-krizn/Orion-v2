@@ -31,6 +31,7 @@ export class InputController {
   public onDashPressed: () => void = () => {};
   public onFirePressed: (targetWorldPoint?: Vector3) => void = () => {};
   public onAbilityPressed: (index: number) => void = () => {};
+  public onCancelPressed: () => void = () => {};
 
   constructor() {
     this.initKeyboard();
@@ -65,6 +66,9 @@ export class InputController {
       if (e.key.toLowerCase() === "f") {
         this.inputState.secondaryTriggered = true;
         this.onAbilityPressed(0);
+      }
+      if (e.key.toLowerCase() === "x") {
+        this.onCancelPressed();
       }
     });
 

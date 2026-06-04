@@ -23,6 +23,8 @@ import {
   Upload,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Download,
   Lock,
   Unlock,
@@ -65,16 +67,11 @@ export default function App() {
   const [placementMode, setPlacementMode] = useState<boolean>(false);
 
   // Navigation / Game state: "menu" | "training" | "editor" | "options"
-  const [gameState, setGameState] = useState<"menu" | "training" | "editor" | "options">(() => {
-    const urlParams = new URL(window.location.href).searchParams;
-    return urlParams.get("mode") === "edit" ? "editor" : "menu";
-  });
+  // Defaulting to "menu" on load to support GitHub Pages and custom game states starting cleanly.
+  const [gameState, setGameState] = useState<"menu" | "training" | "editor" | "options">("menu");
 
-  // App mode: whether we are playing or editing
-  const [appMode, setAppMode] = useState<"play" | "edit">(() => {
-    const urlParams = new URL(window.location.href).searchParams;
-    return urlParams.get("mode") === "edit" ? "edit" : "play";
-  });
+  // App mode is now a derived constant computed from the game state
+  const appMode = gameState === "editor" ? "edit" : "play";
 
   // Custom keyword query input state
   const [showEditorAuth, setShowEditorAuth] = useState<boolean>(false);
@@ -143,6 +140,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"settings" | "effects" | "help" | "json" | "loadouts">("loadouts");
   const [showJoystick, setShowJoystick] = useState<boolean>(true);
   const [showTelemetry, setShowTelemetry] = useState<boolean>(true);
+  const [showCombatDebug, setShowCombatDebug] = useState<boolean>(true);
+  const [commanderCollapsed, setCommanderCollapsed] = useState<boolean>(false);
   const [showFXWorkbench, setShowFXWorkbench] = useState<boolean>(false);
 
   // Souls inspired Layout states
@@ -235,7 +234,7 @@ export default function App() {
       gameManagerRef.current = null;
       window.removeEventListener("keydown", blockKeys);
     };
-  }, [gameState, appMode]);
+  }, [gameState]);
 
   // Synchronize placement tracking states
   useEffect(() => {
@@ -300,6 +299,40 @@ export default function App() {
         updateFillAndText("topHudHeatFill", "topHudHeatText", heatRatio, heatStr, heatClass);
         updateFillAndText("deckHudHeatFill", "deckHudHeatText", heatRatio, heatStr, heatClass);
         updateFillAndText("mobileHeatFill", "mobileHeatText", heatRatio, heatStr, heatClass);
+
+        // C. Update Combat Debug HUD elements
+        const updateDebugEl = (elId: string, text: string) => {
+          const el = document.getElementById(elId);
+          if (el) el.innerText = text;
+        };
+        const updateDebugAttr = (elId: string, classNameStr: string) => {
+          const el = document.getElementById(elId);
+          if (el) el.className = classNameStr;
+        };
+
+        const cs = player.combatState;
+        if (cs) {
+          updateDebugEl("dbgHp", `${Math.ceil(cs.hp)} / ${cs.maxHp}`);
+          updateDebugEl("dbgArmor", `${Math.ceil(cs.armor)} / ${cs.maxArmor} ${cs.isArmorBroken ? '(BRK: ' + cs.armorBreakTimer.toFixed(1) + 's)' : ''}`);
+          updateDebugAttr("dbgArmor", cs.isArmorBroken ? "text-rose-500 font-bold animate-pulse text-[10.5px]" : "text-sky-300 text-[10.5px] font-black");
+
+          updateDebugEl("dbgEn", `${Math.ceil(cs.en)} / ${cs.maxEn}`);
+          updateDebugEl("dbgHeat", `${Math.ceil(cs.heat)}% ${cs.isOverheated ? '(OHT: ' + cs.overheatCooldownTimer.toFixed(1) + 's)' : ''}`);
+          updateDebugAttr("dbgHeat", cs.isOverheated ? "text-rose-500 font-bold animate-pulse text-[10.5px]" : "text-orange-400 text-[10.5px] font-black");
+
+          updateDebugEl("dbgLock", `${cs.lockState} ${cs.lockState === 'Acquiring' ? '(' + (cs.lockProgress * 100).toFixed(0) + '%)' : ''}`);
+          updateDebugEl("dbgLockTarget", cs.lockTargetId ? cs.lockTargetId : "None");
+
+          updateDebugEl("dbgActionState", cs.actionState);
+          updateDebugAttr("dbgActionState", cs.actionState === 'Interrupted' ? "text-rose-500 font-black animate-bounce" : "text-emerald-400 font-black");
+          updateDebugEl("dbgActiveAction", cs.currentAction ? `${cs.currentAction.name} (${cs.actionPhaseTimer.toFixed(1)}s)` : "None");
+
+          updateDebugEl("dbgPoise", `${Math.ceil(cs.poise)} / ${cs.maxPoise}`);
+          updateDebugEl("dbgStagger", `${Math.ceil(cs.staggerAccumulation)} / ${cs.staggerThreshold}`);
+          
+          updateDebugEl("dbgGuard", `${Math.ceil(cs.guardIntegrity)} / ${cs.maxGuardIntegrity} ${cs.isGuardBroken ? '(BROKEN: ' + cs.guardBreakTimer.toFixed(1) + 's)' : ''}`);
+          updateDebugAttr("dbgGuard", cs.isGuardBroken ? "text-rose-500 font-bold animate-pulse" : "text-yellow-300 font-black");
+        }
         
         // B. Mobile floating HUD projection near player
         const mobileHud = document.getElementById("mobilePlayerFloatingHUD");
@@ -480,7 +513,6 @@ export default function App() {
   const handleAuthSubmit = () => {
     if (authKeyword.trim().toLowerCase() === "brakes") {
       setGameState("editor");
-      setAppMode("edit");
       setShowEditorAuth(false);
       setAuthKeyword("");
       setAuthError(null);
@@ -526,7 +558,6 @@ export default function App() {
 
   const handleExitToMenu = () => {
     setGameState("menu");
-    setAppMode("play");
   };
 
   // Precision alignments update loop
@@ -836,6 +867,17 @@ export default function App() {
             >
               <Activity className="w-2 h-2 animate-pulse text-orange-400" />
               <span>DIAG: {showTelemetry ? "ON" : "OFF"}</span>
+            </button>
+
+            {/* Combat Debug Toggle */}
+            <button
+              id="combatDebugToggleButton"
+              onClick={() => setShowCombatDebug(!showCombatDebug)}
+              className="px-1.5 py-0.5 bg-rose-500/11 hover:bg-rose-500/25 border border-rose-500/35 text-slate-300 hover:text-white text-[8px] rounded font-mono uppercase transition-all flex items-center gap-1 cursor-pointer"
+              title="Toggle Combat Debug Overlay"
+            >
+              <Cpu className="w-2 h-2 animate-pulse text-rose-450" />
+              <span>COMBAT DBG: {showCombatDebug ? "ON" : "OFF"}</span>
             </button>
 
             {gameState === "training" && (
@@ -2204,50 +2246,141 @@ export default function App() {
 
       {/* TRAINING COMMAND FLIGHT DECK */}
       {gameState === "training" && (
-        <div className="absolute top-24 left-4 z-4 select-none pointer-events-auto w-64 p-4 border border-zinc-800 bg-[#0c0c11]/92 backdrop-blur-md rounded-lg shadow-2xl font-mono text-[11px] flex flex-col space-y-3">
-          <div className="flex items-center justify-between border-b border-zinc-850 pb-2 mb-1">
-            <div className="flex items-center space-x-1.5">
-              <span className="w-2 h-2 bg-cyan-400 rounded-full animate-ping" />
+        <div className={`absolute top-24 left-4 z-4 select-none pointer-events-auto w-64 p-4 border border-zinc-800 bg-[#0c0c11]/92 backdrop-blur-md rounded-lg shadow-2xl font-mono text-[11px] flex flex-col ${commanderCollapsed ? "" : "space-y-3"}`}>
+          <div className={`flex items-center justify-between ${commanderCollapsed ? "" : "border-b border-zinc-850 pb-2 mb-1"}`}>
+            <button
+              onClick={() => setCommanderCollapsed(!commanderCollapsed)}
+              className="flex items-center space-x-1.5 hover:text-cyan-200 cursor-pointer focus:outline-none text-left transition-all"
+              title={commanderCollapsed ? "Expand Training Commander" : "Collapse Training Commander"}
+            >
+              <span className="w-2 h-2 bg-cyan-400 rounded-full animate-ping flex-shrink-0" />
               <span className="text-cyan-400 font-bold uppercase tracking-widest text-xs">TRAINING COMMANDER</span>
-            </div>
+              {commanderCollapsed ? (
+                <ChevronDown className="w-3.5 h-3.5 text-cyan-400/70" />
+              ) : (
+                <ChevronUp className="w-3.5 h-3.5 text-cyan-400/70" />
+              )}
+            </button>
             <button
               onClick={handleExitToMenu}
-              className="text-[9px] text-zinc-400 hover:text-zinc-200 border border-zinc-700 hover:border-zinc-500 px-1.5 py-0.5 rounded cursor-pointer transition-all uppercase font-semibold"
+              className="text-[9px] text-zinc-400 hover:text-zinc-200 border border-zinc-700 hover:border-zinc-500 px-1.5 py-0.5 rounded cursor-pointer transition-all uppercase font-semibold flex-shrink-0"
             >
-              Quit Area
+              Quit
             </button>
           </div>
 
-          <p className="text-[10px] text-[#d1d1d6]/60 leading-normal uppercase">
-            SPAWN PRACTICE FRACTION UNITS INTO ARMORED ARENA AT RANGE 12M:
-          </p>
+          {!commanderCollapsed && (
+            <>
+              <p className="text-[10px] text-[#d1d1d6]/60 leading-normal uppercase">
+                SPAWN PRACTICE FRACTION UNITS INTO ARMORED ARENA AT RANGE 12M:
+              </p>
 
-          <div className="flex flex-col space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
-            {enemies.length > 0 ? (
-              enemies.map((enemy) => (
-                <button
-                  key={enemy.id}
-                  onClick={() => handleSpawnEnemy(enemy.id)}
-                  className="w-full text-left p-2 rounded bg-cyan-950/20 hover:bg-cyan-950/35 border border-cyan-500/20 hover:border-cyan-500/50 text-[#d1d1d6] hover:text-cyan-200 flex items-center justify-between tracking-wide transition-all cursor-pointer font-bold uppercase text-[9px]"
-                >
-                  <span>{enemy.name}</span>
-                  <span className="text-cyan-400">SPAWN</span>
-                </button>
-              ))
-            ) : (
-              <div className="p-3 text-center text-[10px] text-[#d1d1d6]/40 uppercase tracking-tight">
-                No dynamic test frames loaded
+              <div className="flex flex-col space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
+                {enemies.length > 0 ? (
+                  enemies.map((enemy) => (
+                    <button
+                      key={enemy.id}
+                      onClick={() => handleSpawnEnemy(enemy.id)}
+                      className="w-full text-left p-2 rounded bg-cyan-950/20 hover:bg-cyan-950/35 border border-cyan-500/20 hover:border-cyan-500/50 text-[#d1d1d6] hover:text-cyan-200 flex items-center justify-between tracking-wide transition-all cursor-pointer font-bold uppercase text-[9px]"
+                    >
+                      <span>{enemy.name}</span>
+                      <span className="text-cyan-400">SPAWN</span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="p-3 text-center text-[10px] text-[#d1d1d6]/40 uppercase tracking-tight">
+                    No dynamic test frames loaded
+                  </div>
+                )}
               </div>
-            )}
+
+              <div className="pt-2 border-t border-zinc-850 space-y-1.5">
+                <button
+                  onClick={handleClearEnemies}
+                  className="w-full p-2 bg-red-950/25 border border-red-500/20 hover:border-red-500/50 text-red-400 hover:text-red-200 rounded text-center transition-all cursor-pointer text-[10px] font-bold uppercase"
+                >
+                  💥 Purge Active Hostiles
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* COMBAT SYSTEM HUD DEBUG TERMINAL */}
+      {gameState === "training" && showCombatDebug && (
+        <div className="absolute right-4 top-20 z-40 w-72 bg-[#040407]/92 border border-orange-500/30 rounded-xl p-4 font-mono select-none pointer-events-auto backdrop-blur-md shadow-[0_0_25px_rgba(249,115,22,0.15)] flex flex-col space-y-3">
+          <div className="flex items-center justify-between border-b border-orange-500/20 pb-2">
+            <span className="text-[10px] font-black tracking-widest text-[#d1d1d6]/50 uppercase flex items-center gap-1.5 animate-pulse">
+              <span className="w-1.5 h-1.5 bg-orange-500 rounded-full" />
+              ORION COMBAT CORE
+            </span>
+            <button 
+              onClick={() => setShowCombatDebug(false)}
+              className="text-[#d1d1d6]/40 hover:text-white text-[9px] hover:bg-orange-500/10 px-1 border border-transparent hover:border-orange-500/10 rounded cursor-pointer"
+            >
+              [X]
+            </button>
           </div>
 
-          <div className="pt-2 border-t border-zinc-850 space-y-1.5">
-            <button
-              onClick={handleClearEnemies}
-              className="w-full p-2 bg-red-950/25 border border-red-500/20 hover:border-red-500/50 text-red-400 hover:text-red-200 rounded text-center transition-all cursor-pointer text-[10px] font-bold uppercase"
-            >
-              💥 Purge Active Hostiles
-            </button>
+          <div className="grid grid-cols-2 gap-2 text-[9px] uppercase font-bold text-[#d1d1d6]/70">
+            <div className="flex flex-col border border-white/5 bg-white/[0.01] p-1.5 rounded">
+              <span className="text-red-400 text-[8px] tracking-wider mb-1 flex items-center gap-1"><Heart className="w-1.5 h-1.5"/> CORE REPLICATOR</span>
+              <span id="dbgHp" className="text-[10.5px] font-black text-rose-350">-- / --</span>
+            </div>
+            <div className="flex flex-col border border-white/5 bg-white/[0.01] p-1.5 rounded">
+              <span className="text-sky-450 text-[8px] tracking-wider mb-1 flex items-center gap-1"><Shield className="w-1.5 h-1.5"/> ARMOR BARRIER</span>
+              <span id="dbgArmor" className="text-[10.5px] font-black text-sky-300">-- / --</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-[9px] uppercase font-bold text-[#d1d1d6]/70">
+            <div className="flex flex-col border border-white/5 bg-white/[0.01] p-1.5 rounded">
+              <span className="text-emerald-400 text-[8px] tracking-wider mb-1 flex items-center gap-1"><Zap className="w-1.5 h-1.5"/> EN CHARGE</span>
+              <span id="dbgEn" className="text-[10.5px] font-black text-emerald-300">-- / --</span>
+            </div>
+            <div className="flex flex-col border border-white/5 bg-white/[0.01] p-1.5 rounded">
+              <span className="text-orange-400 text-[8px] tracking-wider mb-1 flex items-center gap-1"><Crosshair className="w-1.5 h-1.5"/> THERMAL RES.</span>
+              <span id="dbgHeat" className="text-[10.5px] font-black text-orange-300">--%</span>
+            </div>
+          </div>
+
+          <div className="border-t border-white/5 pt-2 flex flex-col space-y-1.5 text-[9px]">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400 uppercase tracking-wide">TARGET ACQUISITION:</span>
+              <span id="dbgLock" className="font-bold text-orange-400">---</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400 uppercase tracking-wide">LOCKED SCANNER:</span>
+              <span id="dbgLockTarget" className="font-mono text-cyan-400 max-w-[130px] truncate text-right">---</span>
+            </div>
+          </div>
+
+          <div className="border-t border-white/5 pt-2 flex flex-col space-y-1.5 text-[9px]">
+            <div className="flex justify-between items-center bg-zinc-950/40 p-1 rounded">
+              <span className="text-slate-400 uppercase">ACTION FLOW:</span>
+              <span id="dbgActionState" className="font-black">Neutral</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400 uppercase">ACTIVE MOUNT:</span>
+              <span id="dbgActiveAction" className="font-mono text-cyan-200 text-right overflow-hidden max-w-[150px] truncate">None</span>
+            </div>
+          </div>
+
+          <div className="border-t border-white/5 pt-2 grid grid-cols-2 gap-2 text-[9px]">
+            <div className="flex flex-col">
+              <span className="text-purple-400 text-[8px] tracking-wide mb-0.5 font-bold">POISE GAP</span>
+              <span id="dbgPoise" className="font-bold text-purple-300">100 / 100</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-amber-400 text-[8px] tracking-wide mb-0.5 font-bold">STAGGER RATE</span>
+              <span id="dbgStagger" className="font-bold text-amber-300">0 / 60</span>
+            </div>
+          </div>
+
+          <div className="border-t border-white/5 pt-2 flex justify-between items-center text-[9px]">
+            <span className="text-slate-400 uppercase font-bold"><Shield className="inline w-3 h-3 text-yellow-400 mr-0.5" /> AEGIS INTEGRITY:</span>
+            <span id="dbgGuard" className="font-black text-yellow-300">200 / 200</span>
           </div>
         </div>
       )}
@@ -2332,7 +2465,6 @@ export default function App() {
               <button
                 onClick={() => {
                   setGameState("training");
-                  setAppMode("play");
                 }}
                 className="group relative flex items-center justify-between p-3 rounded border border-cyan-500/40 hover:border-cyan-400 bg-cyan-950/25 hover:bg-cyan-950/45 text-cyan-200 hover:text-white uppercase font-mono text-xs tracking-widest text-left cursor-pointer shadow-[0_0_12px_rgba(6,182,212,0.15)] hover:shadow-[0_0_20px_rgba(6,182,212,0.3)] transition-all"
               >
@@ -2363,16 +2495,19 @@ export default function App() {
                 </span>
               </button>
 
-              {/* OPTIONS */}
+              {/* GITHUB REPOSITORY */}
               <button
-                disabled
-                className="group relative flex items-center justify-between p-2.5 rounded border border-white/5 bg-white/[0.01] opacity-35 text-white/30 cursor-not-allowed uppercase font-mono text-xs tracking-widest text-left"
+                onClick={() => {
+                  window.open("https://github.com/x-krizn/Orion-v2", "_blank");
+                }}
+                className="group relative flex items-center justify-between p-3 rounded border border-indigo-500/40 hover:border-indigo-400 bg-indigo-950/25 hover:bg-indigo-950/45 text-indigo-400 hover:text-white uppercase font-mono text-xs tracking-widest text-left cursor-pointer shadow-[0_0_12px_rgba(99,102,241,0.15)] hover:shadow-[0_0_20px_rgba(99,102,241,0.3)] transition-all"
               >
                 <span className="font-bold flex items-center space-x-2">
-                  <span>Options</span>
+                  <span className="text-indigo-400 group-hover:translate-x-1 transition-transform">ℹ</span>
+                  <span className="tracking-widest">GitHub Repository</span>
                 </span>
-                <span className="text-[8px] px-1.5 py-0.5 border border-white/10 text-white/40 font-bold rounded bg-white/[0.02]">
-                  SELECTABLE
+                <span className="text-[8px] px-1.5 py-0.5 border border-indigo-500/35 text-indigo-400 font-bold rounded bg-indigo-950/40">
+                  LAUNCH
                 </span>
               </button>
             </div>
