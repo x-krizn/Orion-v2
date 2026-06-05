@@ -17,8 +17,9 @@ import {
   TransformNode
 } from "@babylonjs/core";
 import { GameSettings, PerformanceStats, ModelAssetInfo, PlayerInput, GameplayAction } from "../types";
-import { LockState, ActionState, HitReactionTier, StatusEffectType } from "../combat/CombatTypes";
+import { LockState, ActionState, HitReactionTier, StatusEffectType, CombatEntityState } from "../combat/CombatTypes";
 import { COMBAT_TUNABLES } from "../combat/CombatConfig";
+import { CombatEngine } from "../combat/CombatEngine";
 import { InputController } from "../input/InputController";
 import { IsometricCamera } from "../camera/IsometricCamera";
 import { EnvironmentManager } from "../rendering/EnvironmentManager";
@@ -96,13 +97,14 @@ export class GameManager {
     data: EnemyData;
     health: number;
     maxHealth: number;
+    combatState: CombatEntityState;
     lastAttackTime?: number;
   }[] = [];
 
   // Target Lock system structures
-  public lockRange = 35.0; // Lock range stat (m)
-  public lockSpeed = 2.0;  // Lock speed stat (secs to lock = 1 / lockSpeed)
-  public lockCount = 1;    // Lock count stat (max targets)
+  public lockRange = COMBAT_TUNABLES.defaultLockRange;
+  public lockSpeed = COMBAT_TUNABLES.defaultLockSpeed;
+  public lockCount = COMBAT_TUNABLES.defaultLockCount;
   public lockRetention = true; // Lock retention metastat (locks do not break on turning away or distance)
   public persistentAimDirection: Vector3 | null = null;
   public lockedTargets: {
@@ -111,8 +113,11 @@ export class GameManager {
       data: EnemyData;
       health: number;
       maxHealth: number;
+      combatState: CombatEntityState;
+      lastAttackTime?: number;
     };
     progress: number; // 0 to 1
+    losLostTime?: number; // track Line of Sight loss retention
   }[] = [];
   public autoLockEnabled = true;
 
@@ -348,6 +353,11 @@ export class GameManager {
    * Translates 2D screen mouse position into 3D world rays resting on our floor plane
    */
   public get3DWorldPointerPos(): Vector3 {
+    // If we have an active, fully locked-on target, prioritize firing at it directly!
+    if (this.lockedTargets.length > 0 && this.lockedTargets[0].progress >= 1.0) {
+      return this.lockedTargets[0].enemy.node.position;
+    }
+
     const pickInfo = this.scene.pick(this.scene.pointerX, this.scene.pointerY, (mesh) => mesh.name === "cyberGround");
     if (pickInfo && pickInfo.hit && pickInfo.pickedPoint) {
       return pickInfo.pickedPoint;
@@ -384,7 +394,12 @@ export class GameManager {
     // Spawn linear direction from weapon to ray coordinates
     const heading = targetPoint.subtract(muzzlePos);
     heading.y = 0; // Fixed 2D plane height logic
+    const distanceToTarget = heading.length();
     heading.normalize();
+
+    // Limit maximum projectile flight distance or hit position
+    const maxDist = Math.max(2.0, Math.min(40.0, distanceToTarget));
+    const hitPoint = muzzlePos.add(heading.scale(maxDist));
 
     // Dynamic weapon shake based on rarity/power
     let shakeStrength = 0.18;
@@ -396,9 +411,8 @@ export class GameManager {
     // Fetch active status effects on user
     const activeEffect = this.player.getActiveStatusEffect();
 
-    this.fx.spawnLaserShell(muzzlePos, heading, 40, () => {
+    this.fx.spawnLaserShell(muzzlePos, heading, maxDist, () => {
       // Collision hit impact trigger
-      const hitPoint = muzzlePos.add(heading.scale(15)); // Mock impact point
       this.fx.spawnHitImpact(hitPoint);
       
       // Calculate active base damage and overlay status buffs
@@ -629,13 +643,18 @@ export class GameManager {
       shadowGenerator.addShadowCaster(body);
     }
 
-    // Register active list
-    this.spawnedEnemies.push({
+    // Register active list with unified CombatState as the single source of truth
+    const enemyState = CombatEngine.createDefaultCombatState(false, { maxHp: data.health });
+    const enemyObject = {
       node: enemyRoot,
       data: data,
-      health: data.health,
-      maxHealth: data.health
-    });
+      combatState: enemyState,
+      get health(): number { return enemyState.hp; },
+      set health(val: number) { enemyState.hp = val; },
+      get maxHealth(): number { return enemyState.maxHp; },
+      set maxHealth(val: number) { enemyState.maxHp = val; }
+    };
+    this.spawnedEnemies.push(enemyObject as any);
 
     // Deploy spawn splash particle
     this.fx.spawnExplosion(position, 8, 0.6);
@@ -964,8 +983,16 @@ export class GameManager {
       }
 
       if (!hasLoS) {
-        console.log(`[Target Lock]: Target ${lt.enemy.data.name} lock broken due to loss of line-of-sight!`);
-        return false;
+        if (lt.losLostTime === undefined) {
+          lt.losLostTime = 0;
+        }
+        lt.losLostTime += deltaTimeSeconds;
+        if (lt.losLostTime > COMBAT_TUNABLES.defaultLockRetentionSecs) {
+          console.log(`[Target Lock]: Target ${lt.enemy.data.name} lock broken due to loss of line-of-sight beyond retention window!`);
+          return false;
+        }
+      } else {
+        lt.losLostTime = 0;
       }
 
       // Charge up lock acquisition progress (Lock Speed stat!)
@@ -1012,7 +1039,8 @@ export class GameManager {
       if (closestEnemy) {
         this.lockedTargets.push({
           enemy: closestEnemy,
-          progress: 1.0
+          progress: 1.0,
+          losLostTime: 0
         });
       }
     }
@@ -1030,7 +1058,9 @@ export class GameManager {
     // 3.5 Synchronize Lock States into Combat State Machine
     if (this.lockedTargets.length > 0) {
       const lt = this.lockedTargets[0];
-      if (lt.progress >= 1.0) {
+      if (lt.losLostTime && lt.losLostTime > 0) {
+        this.player.combatState.lockState = LockState.BROKEN;
+      } else if (lt.progress >= 1.0) {
         this.player.combatState.lockState = LockState.LOCKED;
       } else {
         this.player.combatState.lockState = LockState.ACQUIRING;

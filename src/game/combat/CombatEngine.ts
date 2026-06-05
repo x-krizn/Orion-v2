@@ -14,7 +14,7 @@ import {
   WeaponCombatStats,
   CombatActionConfig
 } from "./CombatTypes";
-import { COMBAT_TUNABLES, HIT_REACTION_CONFIGS } from "./CombatConfig";
+import { COMBAT_TUNABLES, HIT_REACTION_CONFIGS, STATUS_EFFECT_CONFIGS } from "./CombatConfig";
 
 export interface DamageResolutionResult {
   hitConfirmed: boolean;
@@ -38,12 +38,12 @@ export class CombatEngine {
    * Initializes a default combat state for the player or an enemy combatant
    */
   public static createDefaultCombatState(isPlayer: boolean, data?: { maxHp?: number, scale?: number }): CombatEntityState {
-    const defaultHp = data?.maxHp || (isPlayer ? COMBAT_TUNABLES.playerDefaultMaxHp : 300);
-    const defaultArmor = isPlayer ? COMBAT_TUNABLES.playerDefaultMaxArmor : 50;
-    const defaultEn = isPlayer ? COMBAT_TUNABLES.playerDefaultMaxEn : 50;
+    const defaultHp = data?.maxHp || (isPlayer ? COMBAT_TUNABLES.playerDefaultMaxHp : COMBAT_TUNABLES.enemyDefaultMaxHp);
+    const defaultArmor = isPlayer ? COMBAT_TUNABLES.playerDefaultMaxArmor : COMBAT_TUNABLES.enemyDefaultMaxArmor;
+    const defaultEn = isPlayer ? COMBAT_TUNABLES.playerDefaultMaxEn : COMBAT_TUNABLES.enemyDefaultMaxEn;
     const defaultHeat = 0;
-    const defaultPoise = isPlayer ? COMBAT_TUNABLES.playerDefaultMaxPoise : 50;
-    const defaultStaggerThreshold = isPlayer ? COMBAT_TUNABLES.playerDefaultMaxStaggerThreshold : 60;
+    const defaultPoise = isPlayer ? COMBAT_TUNABLES.playerDefaultMaxPoise : COMBAT_TUNABLES.enemyDefaultMaxPoise;
+    const defaultStaggerThreshold = isPlayer ? COMBAT_TUNABLES.playerDefaultMaxStaggerThreshold : COMBAT_TUNABLES.enemyDefaultMaxStaggerThreshold;
 
     return {
       hp: defaultHp,
@@ -113,23 +113,56 @@ export class CombatEngine {
     // Filter out decayed status effects
     state.activeEffects = state.activeEffects.filter(e => e.duration > 0);
 
-    // Apply modifiers from status effects
-    const isSlowed = state.activeEffects.some(e => e.type === StatusEffectType.SLOW);
-    const isBlind = state.activeEffects.some(e => e.type === StatusEffectType.BLIND);
-    const isSilenced = state.activeEffects.some(e => e.type === StatusEffectType.SILENCE);
-    const isDisarmed = state.activeEffects.some(e => e.type === StatusEffectType.DISARM);
-
-    // 3. Action Phase state machine ticking & recovery
+    // 3. Action Phase state machine ticking & recovery (Startup -> Active -> Recovery)
     if (state.currentAction) {
       if (state.actionPhaseTimer > 0) {
         state.actionPhaseTimer -= deltaTimeSecs;
         if (state.actionPhaseTimer <= 0) {
-          // Transition through action phases based on current configuration
-          // Action is finished! Return to NEUTRAL.
-          state.actionState = ActionState.NEUTRAL;
-          state.currentAction = null;
+          const action = state.currentAction;
+          if (state.actionState === ActionState.STARTUP) {
+            // Transition from Startup to Active!
+            state.actionState = ActionState.ACTIVE;
+            state.actionPhaseTimer = action.active;
+            
+            // Pay action costs at Active phase if specified in metadata
+            if ((action as any).payCostAtActive) {
+              if (action.enCost) {
+                state.en = Math.max(0, state.en - action.enCost);
+              }
+              if (action.heatCost) {
+                state.heat = Math.min(state.maxHeat, state.heat + action.heatCost);
+              }
+            }
+
+            console.log(`[Combat Phase Transition]: Action "${action.name}" -> ACTIVE (${state.actionPhaseTimer}s)`);
+          } else if (state.actionState === ActionState.ACTIVE) {
+            // Transition from Active to Recovery!
+            state.actionState = ActionState.RECOVERY;
+            state.actionPhaseTimer = action.recovery;
+            console.log(`[Combat Phase Transition]: Action "${action.name}" -> RECOVERY (${state.actionPhaseTimer}s)`);
+          } else {
+            // Transition from Recovery -> Neutral
+            state.actionState = ActionState.NEUTRAL;
+            state.currentAction = null;
+            console.log(`[Combat Phase Transition]: Action "${action.name}" completed. Return to NEUTRAL.`);
+          }
         }
       }
+    } else if (state.actionState === ActionState.INTERRUPTED) {
+      if (state.actionPhaseTimer > 0) {
+        state.actionPhaseTimer -= deltaTimeSecs;
+        if (state.actionPhaseTimer <= 0) {
+          state.actionState = ActionState.NEUTRAL;
+          console.log(`[Combat Phase Transition]: Interruption lockout ended. Return to NEUTRAL.`);
+        }
+      }
+    }
+
+    // Dynamic Guard Active mapping based on action and phase
+    if (state.currentAction && state.actionState === ActionState.ACTIVE && state.currentAction.allowGuard) {
+      state.guardActive = true;
+    } else {
+      state.guardActive = false;
     }
 
     // 4. Hit reaction recovery
@@ -145,13 +178,14 @@ export class CombatEngine {
       state.armorBreakTimer -= deltaTimeSecs;
       if (state.armorBreakTimer <= 0) {
         state.isArmorBroken = false;
-        state.armor = state.maxArmor * 0.5; // Restores 50% on recovery
-        console.log("[Combat Engine]: Armor Broken state ended. Restored 50% Shield Capacity.");
+        state.armor = state.maxArmor * COMBAT_TUNABLES.armorRestoreFactor;
+        console.log(`[Combat Engine]: Armor Broken state ended. Restored ${(COMBAT_TUNABLES.armorRestoreFactor * 100).toFixed(0)}% Shield Capacity.`);
       }
     } else {
-      // Armor regeneration if untouched for 5s and not broken
+      // Armor regeneration if untouched and not broken (taking status effect dampener into account!)
       if (state.timeSinceDamage >= COMBAT_TUNABLES.armorRegenDelaySecs && state.armor < state.maxArmor) {
-        state.armor = Math.min(state.maxArmor, state.armor + COMBAT_TUNABLES.armorRegenRatePerSec * deltaTimeSecs);
+        const regenMult = CombatEngine.getRegenMultiplier(state, "armor");
+        state.armor = Math.min(state.maxArmor, state.armor + COMBAT_TUNABLES.armorRegenRatePerSec * deltaTimeSecs * regenMult);
       }
     }
 
@@ -160,13 +194,14 @@ export class CombatEngine {
       state.guardBreakTimer -= deltaTimeSecs;
       if (state.guardBreakTimer <= 0) {
         state.isGuardBroken = false;
-        state.guardIntegrity = state.maxGuardIntegrity * 0.3; // Restore 30% shield
-        console.log("[Combat Engine]: Guard Integrity recovered from broken cooldown.");
+        state.guardIntegrity = state.maxGuardIntegrity * COMBAT_TUNABLES.guardRestoreFactor;
+        console.log(`[Combat Engine]: Guard Integrity recovered from broken cooldown.`);
       }
     } else {
       // Shield integrity out-of-combat regeneration
-      if (state.timeSinceDamage >= 4.0 && state.guardIntegrity < state.maxGuardIntegrity) {
-        state.guardIntegrity = Math.min(state.maxGuardIntegrity, state.guardIntegrity + 10 * deltaTimeSecs);
+      if (state.timeSinceDamage >= COMBAT_TUNABLES.guardRegenDelaySecs && state.guardIntegrity < state.maxGuardIntegrity) {
+        const regenMult = CombatEngine.getRegenMultiplier(state, "guard");
+        state.guardIntegrity = Math.min(state.maxGuardIntegrity, state.guardIntegrity + COMBAT_TUNABLES.guardRegenRatePerSec * deltaTimeSecs * regenMult);
       }
     }
 
@@ -175,7 +210,7 @@ export class CombatEngine {
       state.overheatCooldownTimer -= deltaTimeSecs;
       state.heat = Math.max(0, state.maxHeat * (state.overheatCooldownTimer / COMBAT_TUNABLES.heatOverheatRecoverySecs));
       // Heat DOT when overheating
-      state.hp = Math.max(1, state.hp - COMBAT_TUNABLES.overheatDoTPerSec * deltaTimeSecs); // Overheat does standard damage
+      state.hp = Math.max(1, state.hp - COMBAT_TUNABLES.overheatDoTPerSec * deltaTimeSecs);
       if (state.overheatCooldownTimer <= 0) {
         state.isOverheated = false;
         state.heat = 0;
@@ -194,8 +229,7 @@ export class CombatEngine {
       state.enRechargeDelayTimer -= deltaTimeSecs;
     } else {
       if (state.en < state.maxEn) {
-        // Regeneration penalty when overheated/slowed
-        const regenMult = state.isOverheated ? 0.4 : 1.0;
+        const regenMult = CombatEngine.getRegenMultiplier(state, "en");
         state.en = Math.min(state.maxEn, state.en + COMBAT_TUNABLES.enRegenRatePerSec * deltaTimeSecs * regenMult);
       }
     }
@@ -220,49 +254,27 @@ export class CombatEngine {
   }
 
   /**
-   * Applies a custom Status Effect to an entity's dynamic registry
+   * Applies a custom Status Effect to an entity's dynamic registry (Fully Data-driven!)
    */
   public static applyStatusEffect(state: CombatEntityState, type: StatusEffectType, duration: number, severity: number = 1.0): void {
-    // See if effect already exists to override or augment it
+    const config = STATUS_EFFECT_CONFIGS[type];
+    if (!config) return;
+
     const exists = state.activeEffects.find(e => e.type === type);
     if (exists) {
-      exists.duration = Math.max(exists.duration, duration); // Refresh duration
-      exists.severity = Math.max(exists.severity, severity);
-    } else {
-      let name = type.toString();
-      let description = `Affected by ${type}`;
-
-      switch (type) {
-        case StatusEffectType.BURN:
-          description = "Thermal overload. Dealing periodic HP damage.";
-          break;
-        case StatusEffectType.SHOCK:
-          description = "Electromagnetic disruption. Stunning system movement.";
-          break;
-        case StatusEffectType.CORRUPTION:
-          description = "Nanite decay. Continuous Shield/Armor deterioration.";
-          break;
-        case StatusEffectType.BLEED:
-          description = "Structural damage. Amplifies incoming impact and critical frequency.";
-          break;
-        case StatusEffectType.SLOW:
-          description = "Thruster inhibitors. Redline speed reduction by 35%.";
-          break;
-        case StatusEffectType.BLIND:
-          description = "Sensor calibration error. Cannot target lock targets.";
-          break;
-        case StatusEffectType.SILENCE:
-          description = "Weapons control buffer. Cannot cast high resource skills.";
-          break;
-        case StatusEffectType.DISARM:
-          description = "Armaments decoupled. Standard ammunition disabled.";
-          break;
+      const stacking = config.stackingRule || "refresh";
+      if (stacking === "refresh") {
+        exists.duration = Math.max(exists.duration, duration);
+        exists.severity = Math.max(exists.severity, severity);
+      } else if (stacking === "add") {
+        exists.duration += duration;
+        exists.severity = Math.max(exists.severity, severity);
       }
-
+    } else {
       state.activeEffects.push({
         type,
-        name,
-        description,
+        name: config.name,
+        description: config.description,
         duration,
         elapsed: 0,
         tickTimer: 0,
@@ -272,7 +284,7 @@ export class CombatEngine {
   }
 
   /**
-   * Status Effects tick logic loop
+   * Status Effects tick logic loop (Data-Driven generic runner!)
    */
   private static tickStatusEffects(state: CombatEntityState, deltaTime: number): void {
     state.activeEffects.forEach(effect => {
@@ -280,31 +292,83 @@ export class CombatEngine {
       effect.elapsed += deltaTime;
       effect.tickTimer += deltaTime;
 
-      // Pulse tick every 1.0s
-      if (effect.tickTimer >= 1.0) {
-        effect.tickTimer -= 1.0;
+      const config = STATUS_EFFECT_CONFIGS[effect.type];
+      if (!config) return;
 
-        switch (effect.type) {
-          case StatusEffectType.BURN:
-            // Continuous thermal bleed damage directly to HP
-            const burnDmg = 15 * effect.severity;
-            state.hp = Math.max(1, state.hp - burnDmg);
-            console.log(`[Status Pulse]: Burn tick deals ${burnDmg} HP damage directly!`);
-            break;
-          case StatusEffectType.CORRUPTION:
-            // Continuous armor erosion
+      const rate = config.tickRate || 1.0;
+      if (effect.tickTimer >= rate) {
+        effect.tickTimer -= rate;
+
+        // Apply periodic damage
+        if (config.periodicDamage) {
+          const amount = config.periodicDamage.amount * effect.severity;
+          if (config.periodicDamage.type === "hp") {
+            state.hp = Math.max(1, state.hp - amount);
+            console.log(`[Status Pulse]: ${config.name} tick deals ${amount.toFixed(0)} HP damage.`);
+          } else if (config.periodicDamage.type === "armor") {
             if (state.armor > 0) {
-              const armorDecay = 12 * effect.severity;
-              state.armor = Math.max(0, state.armor - armorDecay);
-              console.log(`[Status Pulse]: Corruption decay drains ${armorDecay} armor capacity.`);
+              state.armor = Math.max(0, state.armor - amount);
+              console.log(`[Status Pulse]: ${config.name} tick decays ${amount.toFixed(0)} Armor.`);
             }
-            break;
-          case StatusEffectType.SHOCK:
-            // Electrocution minor interrupt
-            state.en = Math.max(0, state.en - 5);
-            break;
+          } else if (config.periodicDamage.type === "en") {
+            state.en = Math.max(0, state.en - amount);
+          }
+        }
+
+        // Apply periodic drain
+        if (config.periodicDrain) {
+          const amount = config.periodicDrain.amount * effect.severity;
+          if (config.periodicDrain.type === "en") {
+            state.en = Math.max(0, state.en - amount);
+            console.log(`[Status Pulse]: ${config.name} tick drains ${amount.toFixed(0)} EN.`);
+          }
         }
       }
+    });
+  }
+
+  /**
+   * Static Getters for Modifiers (Data-driven)
+   */
+  public static getSpeedMultiplier(state: CombatEntityState): number {
+    let multiplier = 1.0;
+    if (state.isOverheated) {
+      multiplier *= COMBAT_TUNABLES.overheatSpeedDebuffMult;
+    }
+    state.activeEffects.forEach(effect => {
+      const config = STATUS_EFFECT_CONFIGS[effect.type];
+      if (config && config.speedMultiplier !== undefined) {
+        multiplier *= config.speedMultiplier;
+      }
+    });
+    return multiplier;
+  }
+
+  public static getRegenMultiplier(state: CombatEntityState, type: "en" | "armor" | "guard"): number {
+    let multiplier = 1.0;
+    if (type === "en" && state.isOverheated) {
+      multiplier *= COMBAT_TUNABLES.overheatEnRegenPenaltyMult;
+    }
+    state.activeEffects.forEach(effect => {
+      const config = STATUS_EFFECT_CONFIGS[effect.type];
+      if (config && config.regenPenalty && config.regenPenalty.type === type) {
+        multiplier *= config.regenPenalty.penaltyMultiplier;
+      }
+    });
+    return multiplier;
+  }
+
+  public static isActionRestricted(state: CombatEntityState, restriction: "no_skills" | "no_attacks" | "no_movement" | "all"): boolean {
+    return state.activeEffects.some(effect => {
+      const config = STATUS_EFFECT_CONFIGS[effect.type];
+      return config && (config.actionRestriction === restriction || config.actionRestriction === "all");
+    });
+  }
+
+  public static isTargetLockPrevented(state: CombatEntityState): boolean {
+    return state.activeEffects.some(effect => {
+      const config = STATUS_EFFECT_CONFIGS[effect.type];
+      return config && config.lockModifier === "prevent_lock";
     });
   }
 
@@ -340,7 +404,7 @@ export class CombatEngine {
     };
 
     // 1. Evaluate Critical Hit chance
-    const critChance = weaponStats?.critChance || 0.10;
+    const critChance = weaponStats?.critChance || COMBAT_TUNABLES.defaultCritChance;
     const isCrit = Math.random() < critChance;
     output.isCrit = isCrit;
 
@@ -352,7 +416,7 @@ export class CombatEngine {
     // Process Status modifiers (Slow slows actions, Bleed increases crit damage, etc.)
     const hasBleed = targetState.activeEffects.some(e => e.type === StatusEffectType.BLEED);
     if (hasBleed) {
-      finalDamage *= 1.25; // 25% damage boost if bleeding
+      finalDamage *= COMBAT_TUNABLES.bleedDamageMultiplier; // 25% damage boost if bleeding (fully config driven!)
     }
 
     output.damageBeforeGuard = finalDamage;
@@ -378,7 +442,6 @@ export class CombatEngine {
         guardBlocked = true;
 
         // Apply reduction factor
-        const dmgGuardReduction = weaponStats ? (finalDamage * (1.0 - weaponStats.penetration)) : finalDamage;
         const blockedDamage = finalDamage * targetState.guardDamageReduction;
         const remainderDamage = finalDamage - blockedDamage;
 
@@ -386,7 +449,7 @@ export class CombatEngine {
         targetState.guardIntegrity -= blockedDamage;
 
         finalDamage = remainderDamage;
-        finalImpact *= 0.2; // Guard shields shrug off 80% impact
+        finalImpact *= COMBAT_TUNABLES.guardImpactReductionFactor; // Guard shields block default 80% impact (from config!)
 
         console.log(`[Combat Pipeline]: Defended by Active Guard! Blocked ${blockedDamage.toFixed(1)} damage. Guard integrity remaining: ${targetState.guardIntegrity}/${targetState.maxGuardIntegrity}`);
 
@@ -394,7 +457,7 @@ export class CombatEngine {
         if (targetState.guardIntegrity <= 0) {
           targetState.guardIntegrity = 0;
           targetState.isGuardBroken = true;
-          targetState.guardBreakTimer = 5.0; // disabled for 5.0s
+          targetState.guardBreakTimer = COMBAT_TUNABLES.defaultGuardBreakDuration;
           
           output.guardBroken = true;
           output.resultReactionTier = HitReactionTier.TIER_3_HEAVY_STAGGER; 
@@ -403,8 +466,9 @@ export class CombatEngine {
           targetState.currentReactionTier = HitReactionTier.TIER_3_HEAVY_STAGGER;
           targetState.reactionRecoveryTimer = HIT_REACTION_CONFIGS[HitReactionTier.TIER_3_HEAVY_STAGGER].duration;
           
-          // Guard break immediately resets action
+          // Guard break immediately resets action and locks out
           targetState.actionState = ActionState.INTERRUPTED;
+          targetState.actionPhaseTimer = COMBAT_TUNABLES.defaultGuardBreakDuration;
           targetState.currentAction = null;
           
           console.log("[Combat Pipeline]: GUARD BROKEN! Target is heavily staggered.");
@@ -463,6 +527,7 @@ export class CombatEngine {
       // Force high stagger tier
       prospectiveReaction = HitReactionTier.TIER_2_STAGGER;
       targetState.actionState = ActionState.INTERRUPTED;
+      targetState.actionPhaseTimer = COMBAT_TUNABLES.defaultInterruptLockoutSecs;
       targetState.currentAction = null;
       output.actionInterrupted = true;
       
@@ -470,20 +535,22 @@ export class CombatEngine {
     }
 
     // 6. Evaluate Interruption & Poise Mechanics
-    // Only interrupt current actions if not guarded, and impact exceeds current poise
-    if (targetState.currentAction && !targetState.currentAction.superArmor) {
+    if (targetState.currentAction) {
       const activeAction = targetState.currentAction;
-      let effectivePoise = targetState.poise;
+      
+      if (activeAction.uninterruptible) {
+        console.log(`[Combat Pipeline]: Action "${activeAction.name}" is uninterruptible (ignores standard hit interrupts).`);
+      } else if (activeAction.superArmor) {
+        console.log(`[Combat Pipeline]: Action "${activeAction.name}" has Super Armor (ignores standard action interrupt).`);
+      } else {
+        let effectivePoise = targetState.poise;
+        if (activeAction.poiseValue !== undefined) {
+          effectivePoise = activeAction.poiseValue;
+        }
 
-      // If action defines poise values, use that
-      if (activeAction.poiseValue !== undefined) {
-        effectivePoise = activeAction.poiseValue;
-      }
-
-      if (finalImpact > effectivePoise) {
-        // Attack interrupts action commitment check
-        if (!activeAction.uninterruptible) {
+        if (finalImpact > effectivePoise) {
           targetState.actionState = ActionState.INTERRUPTED;
+          targetState.actionPhaseTimer = COMBAT_TUNABLES.defaultInterruptLockoutSecs; // Lockout in Interrupted state!
           targetState.currentAction = null;
           output.actionInterrupted = true;
           
@@ -491,9 +558,37 @@ export class CombatEngine {
             prospectiveReaction = HitReactionTier.TIER_1_FLINCH;
           }
           console.log(`[Combat Pipeline]: Interruption success! Impact ${finalImpact.toFixed(0)} broke action poise target of ${effectivePoise}`);
+        } else {
+          console.log(`[Combat Pipeline]: Interruption resisted. Impact ${finalImpact.toFixed(0)} did not break poise target of ${effectivePoise}`);
         }
       }
     }
+
+    // Process "trigger on hit" status effect hooks generically
+    attackerState.activeEffects.forEach(effect => {
+      const config = STATUS_EFFECT_CONFIGS[effect.type];
+      if (config && config.triggerOnHit) {
+        const h = config.triggerOnHit;
+        if (Math.random() < h.probability) {
+          CombatEngine.applyStatusEffect(targetState, h.effectId, h.duration);
+          console.log(`[Status Effect Hook]: ${effect.name} triggered on hit! Applied ${h.effectId} to target.`);
+        }
+      }
+    });
+
+    // Process "trigger on damage taken" status effect hooks generically
+    targetState.activeEffects.forEach(effect => {
+      const config = STATUS_EFFECT_CONFIGS[effect.type];
+      if (config && config.triggerOnDamageTaken) {
+        const d = config.triggerOnDamageTaken;
+        if (Math.random() < d.probability) {
+          if (d.retaliateDamage) {
+            attackerState.hp = Math.max(1, attackerState.hp - d.retaliateDamage);
+            console.log(`[Status Effect Hook]: ${effect.name} triggered on damage taken! Dealt ${d.retaliateDamage} retaliate damage to attacker.`);
+          }
+        }
+      }
+    });
 
     // Overwrite weaker reaction state with stronger hit reaction tier
     if (prospectiveReaction > targetState.currentReactionTier) {

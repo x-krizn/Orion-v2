@@ -369,13 +369,19 @@ export default function App() {
         if (lockContainer) {
           let hudHTML = "";
           const engine = gm.scene.getEngine();
-          const viewportGlobal = gm.scene.activeCamera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
+          const canvas = engine.getRenderingCanvas();
+          const clientW = canvas ? canvas.clientWidth : engine.getRenderWidth();
+          const clientH = canvas ? canvas.clientHeight : engine.getRenderHeight();
+          const viewportGlobal = gm.scene.activeCamera.viewport.toGlobal(clientW, clientH);
           
-          const maxW = engine.getRenderWidth();
-          const maxH = engine.getRenderHeight();
+          const maxW = clientW;
+          const maxH = clientH;
 
           gm.spawnedEnemies.forEach(enemy => {
-            const enemyPos = enemy.node.position;
+            const enemyScale = enemy.data?.scale || 1.0;
+            const enemyPos = enemy.node.position.clone();
+            enemyPos.y += 0.8 * enemyScale;
+
             const projected = Vector3.Project(
               enemyPos,
               Matrix.IdentityReadOnly,
@@ -950,247 +956,268 @@ export default function App() {
           </span>
         </div>
         )}
-      </header>
-      {/* ---------------------------------------------------- */}
-      {/* COMBAT FLIGHT DECK (Unified Retro Gamepad Overlay) */}
+      </header>      {/* ---------------------------------------------------- */}
+      {/* COMBAT FLIGHT DECKS (Two Corner-Anchored Flight Suites) */}
       {/* ---------------------------------------------------- */}
       {showJoystick && (
-        <div 
-          onPointerDown={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
-          onTouchStart={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
-          onTouchMove={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
-          onTouchEnd={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
-          className={`absolute z-4 select-none pointer-events-auto rounded-2xl p-4 border transition-all ${
-            layoutUnlocked 
-              ? "border-red-500 bg-red-950/30 shadow-[0_0_20px_rgba(239,68,68,0.3)] ring-2 ring-red-500/40" 
-              : "border-zinc-800 bg-[#07070a]/94 backdrop-blur-md shadow-[0_0_30px_rgba(0,0,0,0.95)]"
-          }`}
-          style={{
-            right: '1.5rem',
-            bottom: '1.5rem',
-            transform: `translate(-${actionsOffset.x}px, -${actionsOffset.y}px) scale(${actionsSize})`,
-            transformOrigin: 'bottom right',
-            touchAction: 'none',
-            width: '320px'
-          }}
-        >
-          {layoutUnlocked && (
-            <div 
-              onMouseDown={(e) => handleDragStart("actions", e)}
-              onTouchStart={(e) => handleDragStart("actions", e)}
-              className="absolute -top-6 left-0 right-0 h-5 bg-red-500 text-black text-[9px] font-mono font-black flex items-center justify-between px-2 cursor-move rounded-t-md uppercase select-none animate-pulse"
-            >
-              <div className="flex items-center gap-1">
-                <Move className="w-2.5 h-2.5" />
-                <span>Drag Combat Deck</span>
+        <>
+          {/* LEFT WING DECK (Walk/Aim Analog Stick, X Y A Face Buttons & System Controls) */}
+          <div 
+            onPointerDown={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            onTouchStart={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            onTouchMove={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            onTouchEnd={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            className={`absolute z-4 select-none pointer-events-auto rounded-2xl p-3 sm:p-4 border transition-all ${
+              layoutUnlocked 
+                ? "border-red-500 bg-red-950/30 shadow-[0_0_20px_rgba(239,68,68,0.3)] ring-2 ring-red-500/40" 
+                : "border-zinc-850 bg-[#07070a]/94 backdrop-blur-md shadow-[0_0_25px_rgba(0,0,0,0.92)]"
+            }`}
+            style={{
+              left: '1.5rem',
+              bottom: '1.5rem',
+              transform: `translate(${joystickOffset.x}px, -${joystickOffset.y}px) scale(${joystickSize})`,
+              transformOrigin: 'bottom left',
+              touchAction: 'none',
+              width: '320px'
+            }}
+          >
+            {layoutUnlocked && (
+              <div 
+                onMouseDown={(e) => handleDragStart("joystick", e)}
+                onTouchStart={(e) => handleDragStart("joystick", e)}
+                className="absolute -top-6 left-0 right-0 h-5 bg-red-500 text-black text-[9px] font-mono font-black flex items-center justify-between px-2 cursor-move rounded-t-md uppercase select-none animate-pulse"
+              >
+                <div className="flex items-center gap-1">
+                  <Move className="w-2.5 h-2.5" />
+                  <span>Drag Left Deck</span>
+                </div>
+                <div className="flex gap-1.5 pointer-events-auto" onMouseDown={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()}>
+                  <button 
+                    onClick={() => setJoystickSize(Math.max(0.6, joystickSize - 0.1))} 
+                    className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
+                  >
+                    -
+                  </button>
+                  <span className="text-[8px] font-bold">{(joystickSize * 100).toFixed(0)}%</span>
+                  <button 
+                    onClick={() => setJoystickSize(Math.min(1.8, joystickSize + 0.1))} 
+                    className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
+                  >
+                    +
+                  </button>
+                </div>
               </div>
-              <div className="flex gap-1.5 pointer-events-auto" onMouseDown={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()}>
-                <button 
-                  onClick={() => setActionsSize(Math.max(0.6, actionsSize - 0.1))} 
-                  className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
-                >
-                  -
-                </button>
-                <span className="text-[8px] font-bold">{(actionsSize * 100).toFixed(0)}%</span>
-                <button 
-                  onClick={() => setActionsSize(Math.min(1.8, actionsSize + 0.1))} 
-                  className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          )}
+            )}
 
-          {/* Top Row: D-Pad, Center control rubber pills, Action buttons */}
-          <div className="flex items-center justify-between mt-1 mb-3">
-            
-            {/* 1. Direcional Cross D-Pad */}
-            <div className="flex flex-col items-center">
-              <span className="text-[7px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest text-[#8e8e93]">DIRECTIONAL</span>
-              <div className="relative w-20 h-20 bg-zinc-950/60 border border-zinc-800/80 rounded-full flex items-center justify-center">
-                {/* UP */}
-                <button
-                  {...bindInputButton(() => {})}
-                  onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); simulateKey("w", true); }}
-                  onPointerUp={() => simulateKey("w", false)}
-                  onPointerCancel={() => simulateKey("w", false)}
-                  className="absolute top-0.5 w-[22px] h-[22px] bg-[#1a1a24] border border-zinc-700/60 hover:bg-zinc-800 active:bg-zinc-700 rounded flex items-center justify-center text-[10px] text-slate-300 font-bold shadow active:scale-90 select-none cursor-pointer transition-transform"
-                  title="Move Forward"
+            {/* Left Deck layout: Row structure holding Analog Stick, select/start, and XY/A face buttons */}
+            <div className="flex items-center justify-between mt-1">
+              
+              {/* 1. Touch Analog Control Stick */}
+              <div className="flex flex-col items-center">
+                <span className="text-[7px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest text-[#8e8e93]">ANALOG STICK</span>
+                <div
+                  ref={joystickBoundRef}
+                  onPointerDown={handleJoystickPointerDown}
+                  onPointerMove={handleJoystickPointerMove}
+                  onPointerUp={handleJoystickPointerUpOrCancel}
+                  onPointerCancel={handleJoystickPointerUpOrCancel}
+                  className="relative w-20 h-20 rounded-full bg-zinc-950/60 border border-zinc-800/80 flex items-center justify-center shadow-inner touch-none cursor-pointer"
                 >
-                  ▲
-                </button>
-                {/* LEFT */}
-                <button
-                  {...bindInputButton(() => {})}
-                  onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); simulateKey("a", true); }}
-                  onPointerUp={() => simulateKey("a", false)}
-                  onPointerCancel={() => simulateKey("a", false)}
-                  className="absolute left-0.5 w-[22px] h-[22px] bg-[#1a1a24] border border-zinc-700/60 hover:bg-zinc-800 active:bg-zinc-700 rounded flex items-center justify-center text-[10px] text-slate-300 font-bold shadow active:scale-90 select-none cursor-pointer transition-transform"
-                  title="Move Left"
-                >
-                  ◀
-                </button>
-                {/* RIGHT */}
-                <button
-                  {...bindInputButton(() => {})}
-                  onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); simulateKey("d", true); }}
-                  onPointerUp={() => simulateKey("d", false)}
-                  onPointerCancel={() => simulateKey("d", false)}
-                  className="absolute right-0.5 w-[22px] h-[22px] bg-[#1a1a24] border border-zinc-700/60 hover:bg-zinc-800 active:bg-zinc-700 rounded flex items-center justify-center text-[10px] text-slate-300 font-bold shadow active:scale-90 select-none cursor-pointer transition-transform"
-                  title="Move Right"
-                >
-                  ▶
-                </button>
-                {/* DOWN */}
-                <button
-                  {...bindInputButton(() => {})}
-                  onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); simulateKey("s", true); }}
-                  onPointerUp={() => simulateKey("s", false)}
-                  onPointerCancel={() => simulateKey("s", false)}
-                  className="absolute bottom-0.5 w-[22px] h-[22px] bg-[#1a1a24] border border-zinc-700/60 hover:bg-zinc-800 active:bg-zinc-700 rounded flex items-center justify-center text-[10px] text-slate-300 font-bold shadow active:scale-90 select-none cursor-pointer transition-transform"
-                  title="Move Backward"
-                >
-                  ▼
-                </button>
-                <div className="w-5 h-5 bg-zinc-950/80 rounded-full border border-zinc-900/40" />
+                  {/* Subtle crosshairs / details */}
+                  <div className="absolute inset-2 rounded-full border border-zinc-800/20 pointer-events-none" />
+                  <div className="absolute top-1/2 left-1 right-1 h-[1px] bg-zinc-800/20 pointer-events-none" />
+                  <div className="absolute left-1/2 top-1 bottom-1 w-[1px] bg-zinc-800/20 pointer-events-none" />
+                  
+                  <div
+                    ref={joystickKnobRef}
+                    className="w-9 h-9 rounded-full bg-gradient-to-tr from-zinc-800 to-zinc-650 border border-zinc-600 shadow-[0_4px_10px_rgba(0,0,0,0.6)] flex items-center justify-center pointer-events-none transition-transform duration-75"
+                    style={{ transform: "translate(0px, 0px)" }}
+                  >
+                    <div className="w-3.5 h-3.5 rounded-full bg-zinc-950/40 border border-zinc-800" />
+                  </div>
+                </div>
               </div>
-            </div>
 
-            {/* 2. Middle Row: Two Vertical Pill Buttons (rubber select-start type style) */}
-            <div className="flex flex-col items-center justify-center px-1">
-              <span className="text-[7px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest text-[#8e8e93]">CONTROL</span>
-              <div className="flex flex-col space-y-2.5 items-center bg-zinc-950/40 border border-zinc-900/40 p-1.5 rounded-lg shadow-inner">
-                {/* DIAG (top rectangle/pill) */}
-                <div className="flex flex-col items-center">
+              {/* 2. Middle Row: Start & Select (Sel) rubber pill buttons */}
+              <div className="flex flex-col items-center justify-center px-1">
+                <span className="text-[7px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest text-[#8e8e93]">SYSTEM</span>
+                <div className="flex flex-col space-y-2 items-center bg-[#0d0d12] border border-zinc-900/60 p-2.5 rounded-lg shadow-inner">
+                  {/* SEL Button */}
                   <button
                     onClick={() => setShowTelemetry(!showTelemetry)}
-                    className={`w-3.5 h-8 rounded-full border shadow transition-all cursor-pointer active:scale-90 flex items-center justify-center ${
+                    className={`w-9 h-4 rounded-full border shadow transition-all cursor-pointer active:scale-90 flex items-center justify-center ${
                       showTelemetry
                         ? "bg-cyan-500/20 border-cyan-400 text-cyan-400 font-bold"
                         : "bg-zinc-800 border-zinc-700 text-zinc-400"
                     }`}
                     title="Toggle Telemetry Diagnostics"
                   >
-                    <span className="text-[6px] font-black uppercase [writing-mode:vertical-lr] rotate-180 select-none tracking-tighter">DIAG</span>
+                    <span className="text-[6px] font-black uppercase tracking-tighter">SEL</span>
                   </button>
-                </div>
-                {/* MODE (bottom rectangle/pill) */}
-                <div className="flex flex-col items-center">
+                  {/* START Button */}
                   <button
                     {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
-                    className="w-3.5 h-8 rounded-full bg-red-950/40 hover:bg-red-900/30 border border-red-500/50 text-red-400 shadow active:scale-90 flex items-center justify-center transition-all cursor-pointer"
+                    className="w-9 h-4 rounded-full bg-red-950/40 hover:bg-red-900/30 border border-red-500/50 text-red-400 shadow active:scale-90 flex items-center justify-center transition-all cursor-pointer"
                     title="Weapon/Matrix Stance Swap"
                   >
-                    <span className="text-[6px] font-black uppercase [writing-mode:vertical-lr] rotate-180 select-none tracking-tighter text-rose-400">MODE</span>
+                    <span className="text-[6px] font-black uppercase tracking-tighter text-rose-450">START</span>
                   </button>
                 </div>
               </div>
-            </div>
 
-            {/* 3. Face Action Buttons (X Y A Diagonal Arc) */}
+              {/* 3. Face Action Buttons (X Y A Cluster Arrangement) */}
+              <div className="flex flex-col items-center">
+                <span className="text-[7px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest text-[#8e8e93]">ACTION</span>
+                <div className="relative w-20 h-20 bg-zinc-950/60 border border-zinc-800/80 rounded-full select-none shadow-inner flex items-center justify-center">
+                  
+                  {/* Y Button: Top center */}
+                  <button
+                    {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
+                    className="absolute top-1 w-6 h-6 rounded-full bg-[#181822] hover:bg-yellow-500/20 border border-yellow-500/40 hover:border-yellow-400 text-yellow-550 font-bold text-[9px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
+                    title="Stance Swap (Y)"
+                  >
+                    Y
+                  </button>
+
+                  {/* X Button: Left side */}
+                  <button
+                    {...bindInputButton(() => gameManagerRef.current?.triggerActionCancel())}
+                    className="absolute left-1 w-6 h-6 rounded-full bg-[#181822] hover:bg-blue-500/20 border border-blue-500/40 hover:border-blue-400 text-blue-400 font-bold text-[9px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
+                    title="Clear / Interrupt Locks (X)"
+                  >
+                    X
+                  </button>
+
+                  {/* A Button: Bottom center */}
+                  <button
+                    {...bindInputButton(() => gameManagerRef.current?.triggerContextAction())}
+                    className="absolute bottom-1 w-6 h-6 rounded-full bg-[#181822] hover:bg-emerald-500/20 border border-emerald-500/40 hover:border-emerald-400 text-emerald-450 font-bold text-[9px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
+                    title="Shockwave context trigger (A)"
+                  >
+                    A
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          {/* RIGHT WING DECK (Triggers: L1, L2, R1, R2, Dash B Booster) */}
+          <div 
+            onPointerDown={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            onTouchStart={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            onTouchMove={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            onTouchEnd={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            className={`absolute z-4 select-none pointer-events-auto rounded-2xl p-3 sm:p-4 border transition-all ${
+              layoutUnlocked 
+                ? "border-red-500 bg-red-950/30 shadow-[0_0_20px_rgba(239,68,68,0.3)] ring-2 ring-red-500/40" 
+                : "border-zinc-850 bg-[#07070a]/94 backdrop-blur-md shadow-[0_0_25px_rgba(0,0,0,0.92)]"
+            }`}
+            style={{
+              right: '1.5rem',
+              bottom: '1.5rem',
+              transform: `translate(-${actionsOffset.x}px, -${actionsOffset.y}px) scale(${actionsSize})`,
+              transformOrigin: 'bottom right',
+              touchAction: 'none',
+              width: '270px'
+            }}
+          >
+            {layoutUnlocked && (
+              <div 
+                onMouseDown={(e) => handleDragStart("actions", e)}
+                onTouchStart={(e) => handleDragStart("actions", e)}
+                className="absolute -top-6 left-0 right-0 h-5 bg-red-500 text-black text-[9px] font-mono font-black flex items-center justify-between px-2 cursor-move rounded-t-md uppercase select-none animate-pulse"
+              >
+                <div className="flex items-center gap-1">
+                  <Move className="w-2.5 h-2.5" />
+                  <span>Drag Right Deck</span>
+                </div>
+                <div className="flex gap-1.5 pointer-events-auto" onMouseDown={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()}>
+                  <button 
+                    onClick={() => setActionsSize(Math.max(0.6, actionsSize - 0.1))} 
+                    className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
+                  >
+                    -
+                  </button>
+                  <span className="text-[8px] font-bold">{(actionsSize * 100).toFixed(0)}%</span>
+                  <button 
+                    onClick={() => setActionsSize(Math.min(1.8, actionsSize + 0.1))} 
+                    className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Right Deck layout: Double wings of triggers flanking a larger physical red circle B Dash button */}
             <div className="flex flex-col items-center">
-              <span className="text-[7px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest text-[#8e8e93]">ACTION</span>
-              <div className="relative w-20 h-20 bg-zinc-950/60 border border-zinc-800/80 rounded-full select-none shadow-inner flex items-center justify-center">
-                
-                {/* X Button: Top-Right */}
-                <button
-                  {...bindInputButton(() => gameManagerRef.current?.triggerActionCancel())}
-                  className="absolute top-1 right-1.5 w-6 h-6 rounded-full bg-[#181822] hover:bg-blue-500/20 border border-blue-500/40 hover:border-blue-400 text-blue-400 font-bold text-[9px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
-                  title="Clear / Interrupt Locks (X)"
-                >
-                  X
-                </button>
-
-                {/* Y Button: Middle */}
-                <button
-                  {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
-                  className="absolute top-7 right-7 w-6 h-6 rounded-full bg-[#181822] hover:bg-yellow-500/20 border border-yellow-500/40 hover:border-yellow-400 text-yellow-400 font-bold text-[9px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
-                  title="Stance Swap (Y)"
-                >
-                  Y
-                </button>
-
-                {/* A Button: Bottom-Left */}
-                <button
-                  {...bindInputButton(() => gameManagerRef.current?.triggerContextAction())}
-                  className="absolute bottom-1 left-1.5 w-6 h-6 rounded-full bg-[#181822] hover:bg-emerald-500/20 border border-emerald-500/40 hover:border-emerald-400 text-emerald-400 font-bold text-[9px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
-                  title="Shockwave context trigger (A)"
-                >
-                  A
-                </button>
-              </div>
-            </div>
-
-          </div>
-
-          {/* Bottom Sweep: Curved Shoulder Bumpers and Nested circular B Dash button */}
-          <div className="border-t border-zinc-900 pt-3 mt-1.5 flex flex-col items-center justify-center">
-            <span className="text-[7px] text-zinc-600 font-bold mb-2.5 uppercase tracking-widest">TRIGGER MECHANICS & KINETIC BOOSTER</span>
-            
-            <div className="w-full flex items-center justify-between px-1">
+              <span className="text-[7px] text-zinc-500 font-bold mb-2.5 uppercase tracking-widest text-[#8e8e93] leading-none">COMBAT & DRIFT TRIGGER MODULE</span>
               
-              {/* Left Wing Shoulder Buttons */}
-              <div className="flex items-center space-x-1">
-                {/* L2 trigger (Rail/Vortex) */}
-                <button
-                  {...bindInputButton(() => gameManagerRef.current?.triggerL2_OffSecondary())}
-                  className="flex flex-col items-center justify-center h-10 w-11 bg-zinc-950/80 hover:bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 rounded-lg hover:text-white transition-all cursor-pointer shadow -rotate-6 transform"
-                  title="Vortex Rail Cannon (L2)"
-                >
-                  <span className="text-[9px] font-black text-white">L2</span>
-                  <span className="text-[5px] font-bold text-cyan-400 uppercase leading-none mt-0.5">RAIL</span>
-                </button>
+              <div className="w-full flex items-center justify-between mt-1 px-1">
+                
+                {/* Left side: Off-hand Shoulder Bumpers (L1/L2) */}
+                <div className="flex flex-col space-y-2">
+                  {/* L2 trigger (Rail/Vortex) */}
+                  <button
+                    {...bindInputButton(() => gameManagerRef.current?.triggerL2_OffSecondary())}
+                    className="flex flex-col items-center justify-center h-10 w-11 bg-[#1a1a24]/80 hover:bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 rounded-lg hover:text-white transition-all cursor-pointer shadow active:scale-95"
+                    title="Vortex Rail Cannon (L2)"
+                  >
+                    <span className="text-[9px] font-black text-white">L2</span>
+                    <span className="text-[5px] font-bold text-cyan-400 uppercase leading-none mt-0.5">RAIL</span>
+                  </button>
 
-                {/* L1 trigger (Shield/Parry) */}
-                <button
-                  {...bindInputButton(() => gameManagerRef.current?.triggerL1_OffPrimary())}
-                  className="flex flex-col items-center justify-center h-10 w-11 bg-zinc-950/80 hover:bg-slate-500/10 border border-zinc-700 text-[#d1d1d6] rounded-lg hover:text-white transition-all cursor-pointer shadow -rotate-3 transform"
-                  title="Shield Parry Defend (L1)"
-                >
-                  <span className="text-[9px] font-black text-slate-300">L1</span>
-                  <span className="text-[5px] font-bold text-slate-400 uppercase leading-none mt-0.5">SHLD</span>
-                </button>
+                  {/* L1 trigger (Shield/Parry) */}
+                  <button
+                    {...bindInputButton(() => gameManagerRef.current?.triggerL1_OffPrimary())}
+                    className="flex flex-col items-center justify-center h-10 w-11 bg-[#1a1a24]/80 hover:bg-slate-500/10 border border-zinc-700 text-[#d1d1d6] rounded-lg hover:text-white transition-all cursor-pointer shadow active:scale-95"
+                    title="Shield Parry Defend (L1)"
+                  >
+                    <span className="text-[9px] font-black text-slate-300">L1</span>
+                    <span className="text-[5px] font-bold text-slate-400 uppercase leading-none mt-0.5">SHLD</span>
+                  </button>
+                </div>
+
+                {/* Center: Large Kinetic red B Booster button */}
+                <div className="flex flex-col items-center">
+                  <button
+                    {...bindInputButton(() => gameManagerRef.current?.triggerButtonDash())}
+                    className="w-14 h-14 rounded-full bg-gradient-to-tr from-red-650 to-rose-500 hover:from-red-500 hover:to-rose-400 border-2 border-red-400 shadow-[0_0_18px_rgba(239,68,68,0.55)] flex flex-col items-center justify-center active:scale-95 text-white cursor-pointer transition-transform duration-75 shadow-md"
+                    title="Thruster Dash drive (B)"
+                  >
+                    <span className="text-sm font-black drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] leading-none mb-0.5">B</span>
+                    <span className="text-[5.5px] font-extrabold tracking-widest opacity-95 drop-shadow-[0_1px_1px_rgba(0,0,0,0.7)] leading-none text-red-100 uppercase scale-90">BOOST</span>
+                  </button>
+                </div>
+
+                {/* Right side: Main Weapon Shoulder Bumpers (R1/R2) */}
+                <div className="flex flex-col space-y-2">
+                  {/* R2 trigger (Mortar/Wave) */}
+                  <button
+                    {...bindInputButton(() => gameManagerRef.current?.triggerR2_Secondary())}
+                    className="flex flex-col items-center justify-center h-10 w-11 bg-rose-950/20 hover:bg-rose-950/40 border border-rose-550/40 text-rose-350 rounded-lg hover:text-white transition-all cursor-pointer shadow active:scale-95"
+                    title="Secondary Heavy Mortar (R2)"
+                  >
+                    <span className="text-[9px] font-black text-rose-400">R2</span>
+                    <span className="text-[5px] font-bold text-rose-500 uppercase leading-none mt-0.5">MRTR</span>
+                  </button>
+
+                  {/* R1 trigger (Pulse/Slash) */}
+                  <button
+                    {...bindInputButton(() => gameManagerRef.current?.triggerR1_Primary())}
+                    className="flex flex-col items-center justify-center h-10 w-11 bg-orange-950/20 hover:bg-orange-950/40 border border-orange-550/40 text-orange-350 rounded-lg hover:text-white transition-all cursor-pointer shadow active:scale-95 animate-pulse-slow"
+                    title="Primary Laser Slash (R1)"
+                  >
+                    <span className="text-[9px] font-black text-orange-400">R1</span>
+                    <span className="text-[5px] font-bold text-orange-500 uppercase leading-none mt-0.5">PULSE</span>
+                  </button>
+                </div>
+
               </div>
-
-              {/* Centered Accelerator B Circle Button (Nestled below triggers gap) */}
-              <div className="flex flex-col items-center -mt-3">
-                <button
-                  {...bindInputButton(() => gameManagerRef.current?.triggerButtonDash())}
-                  className="w-12 h-12 rounded-full bg-gradient-to-tr from-red-600 to-rose-500 hover:from-red-500 hover:to-rose-400 border-2 border-red-400 shadow-[0_0_15px_rgba(239,68,68,0.55)] flex flex-col items-center justify-center active:scale-95 text-white cursor-pointer transition-transform duration-75 shadow-md"
-                  title="Thruster Dash drive (B)"
-                >
-                  <span className="text-xs font-black drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] leading-none mb-0.5">B</span>
-                  <span className="text-[5px] font-extrabold tracking-widest opacity-95 drop-shadow-[0_1px_1px_rgba(0,0,0,0.7)] leading-none text-red-100 uppercase scale-90">DASH</span>
-                </button>
-              </div>
-
-              {/* Right Wing Shoulder Buttons */}
-              <div className="flex items-center space-x-1">
-                {/* R1 trigger (Pulse/Slash) */}
-                <button
-                  {...bindInputButton(() => gameManagerRef.current?.triggerR1_Primary())}
-                  className="flex flex-col items-center justify-center h-10 w-11 bg-orange-950/20 hover:bg-orange-950/40 border border-orange-550/40 text-orange-300 rounded-lg hover:text-white transition-all cursor-pointer shadow rotate-3 transform animate-pulse-slow"
-                  title="Primary Laser Slash (R1)"
-                >
-                  <span className="text-[9px] font-black text-orange-400">R1</span>
-                  <span className="text-[5px] font-bold text-orange-500 uppercase leading-none mt-0.5">PULSE</span>
-                </button>
-
-                {/* R2 trigger (Mortar/Wave) */}
-                <button
-                  {...bindInputButton(() => gameManagerRef.current?.triggerR2_Secondary())}
-                  className="flex flex-col items-center justify-center h-10 w-11 bg-rose-950/20 hover:bg-rose-950/40 border border-rose-550/40 text-rose-300 rounded-lg hover:text-white transition-all cursor-pointer shadow rotate-6 transform"
-                  title="Secondary Heavy Mortar (R2)"
-                >
-                  <span className="text-[9px] font-black text-rose-400">R2</span>
-                  <span className="text-[5px] font-bold text-rose-500 uppercase leading-none mt-0.5">MRTR</span>
-                </button>
-              </div>
-
             </div>
           </div>
-        </div>
+        </>
       )}
         {/* Centered Desktop Resource dashboard (visible on desktop screen ranges in edit mode) */}
       {appMode === "edit" && (

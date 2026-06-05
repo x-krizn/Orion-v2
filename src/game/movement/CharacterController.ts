@@ -36,20 +36,39 @@ export class CharacterController {
   private boundsSize: number;
   private trailEmitTimer = 0;
 
-  // Souls Mech resources & stats
-  public hp = 1000;
-  public maxHp = 1000;
-  public en = 100;
-  public maxEn = 100;
-  public heat = 0;
-  public maxHeat = 100;
-  public armor = 200;
-  public maxArmor = 200;
-  public isOverheated = false;
-  private timeSinceDamage = 0;
-
   // Unified combat state
   public combatState!: CombatEntityState;
+
+  // Souls Mech resources & stats (Getters/Setters routing through combatState to ensure 100% single source of truth)
+  public get hp(): number { return this.combatState?.hp ?? 1000; }
+  public set hp(val: number) { if (this.combatState) this.combatState.hp = val; }
+
+  public get maxHp(): number { return this.combatState?.maxHp ?? 1000; }
+  public set maxHp(val: number) { if (this.combatState) this.combatState.maxHp = val; }
+
+  public get en(): number { return this.combatState?.en ?? 100; }
+  public set en(val: number) { if (this.combatState) this.combatState.en = val; }
+
+  public get maxEn(): number { return this.combatState?.maxEn ?? 100; }
+  public set maxEn(val: number) { if (this.combatState) this.combatState.maxEn = val; }
+
+  public get heat(): number { return this.combatState?.heat ?? 0; }
+  public set heat(val: number) { if (this.combatState) this.combatState.heat = val; }
+
+  public get maxHeat(): number { return this.combatState?.maxHeat ?? 100; }
+  public set maxHeat(val: number) { if (this.combatState) this.combatState.maxHeat = val; }
+
+  public get armor(): number { return this.combatState?.armor ?? 200; }
+  public set armor(val: number) { if (this.combatState) this.combatState.armor = val; }
+
+  public get maxArmor(): number { return this.combatState?.maxArmor ?? 200; }
+  public set maxArmor(val: number) { if (this.combatState) this.combatState.maxArmor = val; }
+
+  public get isOverheated(): boolean { return this.combatState?.isOverheated ?? false; }
+  public set isOverheated(val: boolean) { if (this.combatState) this.combatState.isOverheated = val; }
+
+  public get timeSinceDamage(): number { return this.combatState?.timeSinceDamage ?? 0; }
+  public set timeSinceDamage(val: number) { if (this.combatState) this.combatState.timeSinceDamage = val; }
 
   // Unified Action-State Framework
   public currentAction: GameplayAction | null = null;
@@ -57,16 +76,26 @@ export class CharacterController {
 
   public triggerAction(action: GameplayAction): boolean {
     if (this.currentAction) {
-      if (!this.currentAction.cancelable) {
-        console.log(`[Action Warning]: Cannot execute "${action.name}" during committed "${this.currentAction.name}"`);
+      const cAct = this.combatState.currentAction;
+      const isCommittedPhase = this.combatState.actionState === ActionState.STARTUP || this.combatState.actionState === ActionState.ACTIVE;
+      if (isCommittedPhase && cAct && cAct.allowCancel === false && !this.currentAction.cancelable) {
+        console.log(`[Action Warning]: Cannot execute "${action.name}" during committed "${cAct.name}"`);
         return false;
       }
       this.cancelCurrentAction();
     }
-    this.currentAction = { ...action, elapsed: 0 };
+
+    if ((action.type as string) === "skill" && CombatEngine.isActionRestricted(this.combatState, "no_skills")) {
+      console.log(`[Action Warning]: Cannot use skills while SILENCED!`);
+      return false;
+    }
+    if (((action.type as string) === "attack" || (action.type as string) === "charge" || (action.type as string) === "channel") && CombatEngine.isActionRestricted(this.combatState, "no_attacks")) {
+      console.log(`[Action Warning]: Cannot attack while DISARMED!`);
+      return false;
+    }
+
+    this.currentAction = { ...action, elapsed: 0, effectsTriggered: false } as any;
     
-    // Sync with Combat State Machine
-    this.combatState.actionState = ActionState.ACTIVE;
     const combatAction = COMBAT_ACTIONS[action.id] || {
       id: action.id,
       name: action.name,
@@ -76,16 +105,32 @@ export class CharacterController {
       cancelable: action.cancelable,
       poiseValue: 20
     };
+    
     this.combatState.currentAction = combatAction;
-    this.combatState.actionPhaseTimer = action.duration;
+    if (combatAction.startup > 0) {
+      this.combatState.actionState = ActionState.STARTUP;
+      this.combatState.actionPhaseTimer = combatAction.startup;
+    } else {
+      this.combatState.actionState = ActionState.ACTIVE;
+      this.combatState.actionPhaseTimer = combatAction.active;
+    }
 
-    console.log(`[Action State]: Started action "${action.name}" (${action.type}) duration ${action.duration}s`);
+    // Pay action costs immediately upon initiation (EN and Heat)
+    if (combatAction.enCost) {
+      this.combatState.en = Math.max(0, this.combatState.en - combatAction.enCost);
+    }
+    if (combatAction.heatCost) {
+      this.combatState.heat = Math.min(this.combatState.maxHeat, this.combatState.heat + combatAction.heatCost);
+    }
+
+    console.log(`[Action State]: Started action "${action.name}" (${action.type}). State: ${this.combatState.actionState}, Phase Timer: ${this.combatState.actionPhaseTimer}s`);
     return true;
   }
 
   public cancelCurrentAction(): boolean {
     if (this.currentAction) {
-      if (!this.currentAction.cancelable) {
+      const cAct = this.combatState.currentAction;
+      if (cAct && cAct.allowCancel === false && !this.currentAction.cancelable) {
         console.log(`[Action Warning]: Action "${this.currentAction.name}" has animation commitment and cannot be canceled!`);
         return false;
       }
@@ -680,6 +725,11 @@ export class CharacterController {
    * Dash mechanic that pushes player forward
    */
   public executeDash(direction: Vector3): boolean {
+    if (this.combatState.currentAction && this.combatState.currentAction.allowDash === false) {
+      console.log(`[Dash Blocked]: Cannot dash during committed action "${this.combatState.currentAction.name}"`);
+      return false;
+    }
+
     if (this.dashCooldownTimer > 0 || this.isDashing || this.en < 22) return false;
 
     this.en -= 22;
@@ -715,7 +765,7 @@ export class CharacterController {
       this.isOverheated = ov;
     });
 
-    // Synchronize older visual properties in real-time
+    // Unified combat getters/setters keep these redundant copies synchronized safely 
     this.hp = this.combatState.hp;
     this.maxHp = this.combatState.maxHp;
     this.en = this.combatState.en;
@@ -725,21 +775,41 @@ export class CharacterController {
     this.armor = this.combatState.armor;
     this.maxArmor = this.combatState.maxArmor;
     this.isOverheated = this.combatState.isOverheated;
-
     this.timeSinceDamage = this.combatState.timeSinceDamage;
 
-    // Check if combat action needs to sync completion
+    // Check if combat action needs to trigger active phase effects or complete
     if (this.currentAction) {
-      if (this.combatState.currentAction === null) {
+      const cs = this.combatState;
+      
+      // If we are in ACTIVE or RECOVERY phase, and have not triggered physical action effects yet, run onComplete!
+      const isEffPhase = cs.actionState === ActionState.ACTIVE || cs.actionState === ActionState.RECOVERY;
+      const isComStage = cs.currentAction;
+      
+      if (isEffPhase && isComStage && !(this.currentAction as any).effectsTriggered) {
+        (this.currentAction as any).effectsTriggered = true;
+        console.log(`[Action Physical Run]: Triggering effects for "${this.currentAction.name}"`);
+        if (this.currentAction.onComplete) {
+          this.currentAction.onComplete();
+        }
+      }
+
+      if (cs.currentAction === null) {
         // Complete current action
         const completed = this.currentAction;
         this.currentAction = null;
-        console.log(`[Combat State Sync]: Unified Action Completed: "${completed.name}"`);
-        if (completed.onComplete) {
-          completed.onComplete();
-        }
+        console.log(`[Combat State Sync]: Action Completed or Interrupted: "${completed.name}"`);
       } else {
-        this.currentAction.elapsed = this.currentAction.duration - this.combatState.actionPhaseTimer;
+        // Determine total elapsed time based on our discrete startup / active / recovery timers
+        const actionConf = cs.currentAction;
+        let totalElapsed = 0;
+        if (cs.actionState === ActionState.STARTUP) {
+          totalElapsed = actionConf.startup - cs.actionPhaseTimer;
+        } else if (cs.actionState === ActionState.ACTIVE) {
+          totalElapsed = actionConf.startup + (actionConf.active - cs.actionPhaseTimer);
+        } else if (cs.actionState === ActionState.RECOVERY) {
+          totalElapsed = actionConf.startup + actionConf.active + (actionConf.recovery - cs.actionPhaseTimer);
+        }
+        this.currentAction.elapsed = totalElapsed;
       }
     }
 
@@ -814,15 +884,18 @@ export class CharacterController {
     this.velocity.setAll(0);
 
     let activeSpeed = this.settings.speed;
-    if (this.currentAction) {
-      if (this.currentAction.type === "stance_change") {
-        activeSpeed *= 0.15; // Stance transitions heavily restrict translation
-      } else if (this.currentAction.type === "channel" || this.currentAction.type === "charge") {
-        activeSpeed *= 0.35; // Channeling/charging heavy weapon actions slows movement
+    
+    // Apply status effect and overheat speed multipliers from the Combat Engine
+    activeSpeed *= CombatEngine.getSpeedMultiplier(this.combatState);
+
+    // Apply action commitment restrictions directly (lockMovement or reduceMovement)
+    if (this.combatState.currentAction) {
+      const activeAction = this.combatState.currentAction;
+      if (activeAction.lockMovement) {
+        activeSpeed = 0;
+      } else if (activeAction.reduceMovement) {
+        activeSpeed *= 0.5;
       }
-    }
-    if (this.activeStatusEffect && this.activeStatusEffect.modifiers && this.activeStatusEffect.modifiers.speedMult !== undefined) {
-      activeSpeed *= this.activeStatusEffect.modifiers.speedMult;
     }
 
     if (this.isDashing) {
@@ -906,10 +979,23 @@ export class CharacterController {
     // Keep ground lock
     this.rootNode.position.y = 0;
 
+    const lockFacing = this.combatState.currentAction?.lockFacing || false;
+    const isLockedOn = this.combatState.lockState === "Locked" || this.combatState.lockState === "Acquiring";
+
     // 4. Smooth snap rotation orientation (no sluggish inertia, but pleasant interpolation)
-    if (input.moveDirection.length() > 0 || this.isDashing) {
+    if ((input.moveDirection.length() > 0 || this.isDashing || isLockedOn) && !lockFacing) {
+      let activeTargetRot = this.targetRotation;
+      // If target locked, orient towards the locked target
+      if (isLockedOn && this.aimPoint) {
+        const toAim = this.aimPoint.subtract(this.rootNode.position);
+        toAim.y = 0;
+        if (toAim.length() > 0.1) {
+          activeTargetRot = Math.atan2(toAim.x, toAim.z);
+        }
+      }
+
       // Interpolate angles over frames
-      const diff = this.targetRotation - this.currentRotation;
+      const diff = activeTargetRot - this.currentRotation;
       
       // Handle floating point wrapping (-PI to PI)
       let wrappedDiff = Math.atan2(Math.sin(diff), Math.cos(diff));
@@ -922,7 +1008,7 @@ export class CharacterController {
 
     // Determine Torso facing direction (independent of movement)
     let targetFacingY = this.currentRotation;
-    if (this.aimPoint) {
+    if (this.aimPoint && !lockFacing) {
       const dir = this.aimPoint.subtract(this.rootNode.position);
       dir.y = 0;
       if (dir.length() > 0.1) {
@@ -933,7 +1019,7 @@ export class CharacterController {
     const diffFacing = targetFacingY - this.currentRotation;
     const wrappedDiffFacing = Math.atan2(Math.sin(diffFacing), Math.cos(diffFacing));
 
-    if (this.torsoAssembly) {
+    if (this.torsoAssembly && !lockFacing) {
       // Smoothly rotate torso assembly towards independent aiming direction
       const torsoRotStep = 8.0 * deltaTimeSeconds;
       let diffTorso = wrappedDiffFacing - this.torsoAssembly.rotation.y;

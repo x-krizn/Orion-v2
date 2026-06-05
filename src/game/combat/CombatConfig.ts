@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { GuardPreset, WeaponCombatStats, StatusEffectType, HitReactionTier, CombatActionConfig } from "./CombatTypes";
+import { GuardPreset, WeaponCombatStats, StatusEffectType, HitReactionTier, CombatActionConfig, StatusEffectConfig } from "./CombatTypes";
 
 export const COMBAT_TUNABLES = {
   // HP settings
@@ -16,6 +16,14 @@ export const COMBAT_TUNABLES = {
   armorBrokenDamageMultiplier: 1.5, // 1.5x damage when broken
   armorBrokenStaggerMultiplier: 1.5, // 1.5x impact received
   armorBrokenRecoveryDelaySecs: 8.0, // recovers and resets armor to 50% max state after 8 seconds
+  armorRestoreFactor: 0.5,        // restores 50% on recovery from break (new!)
+
+  // Guard settings
+  guardRestoreFactor: 0.3,        // restores 30% shield (new!)
+  guardRegenDelaySecs: 4.0,       // delay before guard out-of-combat regen starts (new!)
+  guardRegenRatePerSec: 10.0,     // regeneration per sec (new!)
+  defaultGuardBreakDuration: 5.0, // default break duration (new!)
+  guardImpactReductionFactor: 0.2, // guard blocks 80% impact (new!)
 
   // Energy stats
   playerDefaultMaxEn: 120,
@@ -44,9 +52,100 @@ export const COMBAT_TUNABLES = {
   defaultLockRange: 35.0,
   defaultLockSpeed: 2.0, // speed to lock = 0.5s (1 / 2.0)
   defaultLockCount: 1,
+  defaultLockRetentionSecs: 1.5, // lock stays for 1.5s after LOS loss (new!)
+
+  // Enemy AI metrics (new!)
+  enemyTurnSpeed: 3.5,
+  enemyChaseSpeed: 3.0,
+  enemyAttackCooldownMs: 1800,
+  enemyAttackDamage: 45,
+
+  // Status effect settings (new!)
+  burnDamagePerTick: 15,
+  corruptionDamagePerTick: 12,
+  shockEnergyDrainPerTick: 5,
+  bleedDamageMultiplier: 1.25,
 
   // Critical Damage multiplier
-  defaultCritMultiplier: 1.5
+  defaultCritMultiplier: 1.5,
+
+  // Enemy Default combat stats (new!)
+  enemyDefaultMaxHp: 300,
+  enemyDefaultMaxArmor: 50,
+  enemyDefaultMaxEn: 50,
+  enemyDefaultMaxPoise: 50,
+  enemyDefaultMaxStaggerThreshold: 60,
+
+  // Additional Config driven balance metrics (new!)
+  overheatEnRegenPenaltyMult: 0.4,
+  defaultInterruptLockoutSecs: 0.35,
+  defaultCritChance: 0.10,
+};
+
+// Data-driven Status Effects Configurations (new!)
+export const STATUS_EFFECT_CONFIGS: Record<string, StatusEffectConfig> = {
+  [StatusEffectType.BURN]: {
+    type: StatusEffectType.BURN,
+    name: "Burn",
+    description: "Thermal overload. Dealing periodic HP damage.",
+    duration: 5.0,
+    tickRate: 1.0,
+    periodicDamage: { type: "hp", amount: 15 },
+    regenPenalty: { type: "en", penaltyMultiplier: 0.4 }
+  },
+  [StatusEffectType.SHOCK]: {
+    type: StatusEffectType.SHOCK,
+    name: "Shock",
+    description: "Electromagnetic disruption. Stunning system movement and draining EN.",
+    duration: 3.5,
+    tickRate: 1.0,
+    periodicDrain: { type: "en", amount: 5 },
+    speedMultiplier: 0.5,
+    actionRestriction: "no_skills"
+  },
+  [StatusEffectType.CORRUPTION]: {
+    type: StatusEffectType.CORRUPTION,
+    name: "Corruption",
+    description: "Nanite decay. Continuous Shield/Armor deterioration.",
+    duration: 8.0,
+    tickRate: 1.0,
+    periodicDamage: { type: "armor", amount: 12 }
+  },
+  [StatusEffectType.BLEED]: {
+    type: StatusEffectType.BLEED,
+    name: "Bleed",
+    description: "Structural damage. Amplifies incoming impact and critical susceptibility.",
+    duration: 6.0,
+    stackingRule: "refresh"
+  },
+  [StatusEffectType.SLOW]: {
+    type: StatusEffectType.SLOW,
+    name: "Slow",
+    description: "Thruster inhibitors. Redline speed reduction by 35%.",
+    duration: 4.5,
+    speedMultiplier: 0.65
+  },
+  [StatusEffectType.BLIND]: {
+    type: StatusEffectType.BLIND,
+    name: "Blind",
+    description: "Sensor calibration error. Cannot target lock targets.",
+    duration: 5.0,
+    lockModifier: "prevent_lock"
+  },
+  [StatusEffectType.SILENCE]: {
+    type: StatusEffectType.SILENCE,
+    name: "Silence",
+    description: "Weapons control buffer. Cannot cast high resource skills.",
+    duration: 5.0,
+    actionRestriction: "no_skills"
+  },
+  [StatusEffectType.DISARM]: {
+    type: StatusEffectType.DISARM,
+    name: "Disarm",
+    description: "Armaments decoupled. Standard ammunition disabled.",
+    duration: 5.0,
+    actionRestriction: "no_attacks"
+  }
 };
 
 // Hit reaction duration metrics
@@ -148,7 +247,11 @@ export const COMBAT_ACTIONS: Record<string, CombatActionConfig> = {
     damage: 25,
     impact: 18,
     heatCost: 8,
-    enCost: 0
+    enCost: 0,
+    reduceMovement: 0.8,
+    allowDash: true,
+    allowCancel: true,
+    allowWeaponSwap: true,
   },
   dual_blade_slash: {
     id: "dual_blade_slash",
@@ -162,7 +265,11 @@ export const COMBAT_ACTIONS: Record<string, CombatActionConfig> = {
     impact: 45,
     heatCost: 12,
     enCost: 15,
-    reactionTierOverride: HitReactionTier.TIER_1_FLINCH
+    reactionTierOverride: HitReactionTier.TIER_1_FLINCH,
+    reduceMovement: 0.4,
+    lockFacing: true,
+    allowDash: false,
+    allowWeaponSwap: false,
   },
   fusion_gatling_charge: {
     id: "fusion_gatling_charge",
@@ -176,7 +283,9 @@ export const COMBAT_ACTIONS: Record<string, CombatActionConfig> = {
     damage: 13,
     impact: 6,
     heatCost: 5,
-    enCost: 0
+    enCost: 0,
+    reduceMovement: 0.35,
+    allowDash: true,
   },
   orbital_mortar_launch: {
     id: "orbital_mortar_launch",
@@ -192,7 +301,12 @@ export const COMBAT_ACTIONS: Record<string, CombatActionConfig> = {
     impact: 95,
     heatCost: 40,
     enCost: 30,
-    reactionTierOverride: HitReactionTier.TIER_3_HEAVY_STAGGER
+    reactionTierOverride: HitReactionTier.TIER_3_HEAVY_STAGGER,
+    lockMovement: true,
+    lockFacing: true,
+    allowDash: false,
+    allowGuard: false,
+    allowWeaponSwap: false,
   },
   aegis_shield_raise: {
     id: "aegis_shield_raise",
@@ -204,7 +318,10 @@ export const COMBAT_ACTIONS: Record<string, CombatActionConfig> = {
     poiseValue: 95,
     superArmor: true,
     uninterruptible: true,
-    enCost: 5 // per tick or start
+    enCost: 5,
+    reduceMovement: 0.5,
+    allowDash: true,
+    allowGuard: true,
   },
   tactical_dash: {
     id: "tactical_dash",
@@ -216,6 +333,10 @@ export const COMBAT_ACTIONS: Record<string, CombatActionConfig> = {
     poiseValue: 200,
     superArmor: true,
     uninterruptible: true,
-    enCost: 35
+    enCost: 35,
+    lockFacing: true,
+    allowDash: false,
+    allowGuard: false,
+    allowWeaponSwap: false,
   }
 };

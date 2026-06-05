@@ -26,8 +26,7 @@ export enum LockState {
 // Action States
 export enum ActionState {
   NEUTRAL = "Neutral",
-  ACQUISITION = "Acquisition",
-  COMMITMENT = "Commitment",
+  STARTUP = "Startup",
   ACTIVE = "Active",
   RECOVERY = "Recovery",
   INTERRUPTED = "Interrupted",
@@ -43,6 +42,49 @@ export enum StatusEffectType {
   BLIND = "Blind",
   SILENCE = "Silence",
   DISARM = "Disarm",
+}
+
+// Data-driven Status Effect Configuration Definition
+export interface StatusEffectConfig {
+  type: StatusEffectType;
+  name: string;
+  description: string;
+  duration: number;
+  tickRate?: number; // frequency of execution
+
+  // Periodic effects
+  periodicDamage?: {
+    type: "hp" | "armor" | "en";
+    amount: number;
+  };
+  periodicDrain?: {
+    type: "en" | "heat";
+    amount: number;
+  };
+
+  // Passive modifier mechanics
+  speedMultiplier?: number;
+  regenPenalty?: {
+    type: "en" | "armor" | "guard";
+    penaltyMultiplier: number;
+  };
+
+  // Restriction boundaries
+  actionRestriction?: "no_skills" | "no_attacks" | "no_movement" | "all";
+  lockModifier?: "prevent_lock";
+  
+  stackingRule?: "refresh" | "add" | "ignore";
+
+  // Generic status hooks (trigger occurrences)
+  triggerOnHit?: {
+    effectId: StatusEffectType;
+    duration: number;
+    probability: number;
+  };
+  triggerOnDamageTaken?: {
+    retaliateDamage?: number;
+    probability: number;
+  };
 }
 
 // Action Frame Data / Combat Action definition
@@ -63,6 +105,16 @@ export interface CombatActionConfig {
   damage?: number;
   impact?: number;          // Stagger impact
   reactionTierOverride?: HitReactionTier;
+
+  // Commitment restrictions
+  lockMovement?: boolean;
+  reduceMovement?: number;     // speed factor (e.g., 0.3 = 30%)
+  lockFacing?: boolean;
+  allowDash?: boolean;
+  allowGuard?: boolean;
+  allowCancel?: boolean;
+  allowWeaponSwap?: boolean;
+  allowContextAction?: boolean;
 }
 
 // Complete Dynamic Combat State for Entities
