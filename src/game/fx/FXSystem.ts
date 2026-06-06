@@ -90,13 +90,82 @@ export class FXSystem {
   private previewIntervalTime = 0.5; // Seconds between repeat loops
   private previewTargetNode: any = null;
 
-  // Reusable materials
+  // Reusable materials to optimize mobile performance and prevent memory pressure / WebGL compilations
   private fireColor: Color3 = new Color3(0, 0.94, 1.0); // Cyan default
+  private laserShellMat!: StandardMaterial;
+  private heavyBeamMat!: StandardMaterial;
+  private debrisFireMat!: StandardMaterial;
+  private debrisGoldMat!: StandardMaterial;
+  private shockwaveRingMat!: StandardMaterial;
+  private impactMat!: StandardMaterial;
+  private boosterTrailMatOrange!: StandardMaterial;
+  private boosterTrailMatPrimary!: StandardMaterial;
+  private dynamicMatCache: Map<string, StandardMaterial> = new Map();
 
   constructor(scene: Scene) {
     this.scene = scene;
     this.rootNode = new TransformNode("FXSystemRoot", this.scene);
+    this.initSharedMaterials();
     this.loadEffectDefinitions();
+  }
+
+  private initSharedMaterials(): void {
+    this.laserShellMat = new StandardMaterial("laserShellMat", this.scene);
+    this.laserShellMat.disableLighting = true;
+
+    this.heavyBeamMat = new StandardMaterial("fusionBeamMat", this.scene);
+    this.heavyBeamMat.alpha = 0.95;
+    this.heavyBeamMat.disableLighting = true;
+
+    this.debrisFireMat = new StandardMaterial("debrisFireMat", this.scene);
+    this.debrisFireMat.disableLighting = true;
+
+    this.debrisGoldMat = new StandardMaterial("debrisGoldMat", this.scene);
+    this.debrisGoldMat.emissiveColor = new Color3(1.0, 0.4, 0.0);
+    this.debrisGoldMat.disableLighting = true;
+
+    this.shockwaveRingMat = new StandardMaterial("shockwaveRingMat", this.scene);
+    this.shockwaveRingMat.disableLighting = true;
+
+    this.impactMat = new StandardMaterial("impactMat", this.scene);
+    this.impactMat.emissiveColor = new Color3(1.0, 1.0, 1.0);
+    this.impactMat.disableLighting = true;
+
+    this.boosterTrailMatOrange = new StandardMaterial("boosterTrailMatOrange", this.scene);
+    this.boosterTrailMatOrange.emissiveColor = new Color3(1.0, 0.45, 0.0);
+    this.boosterTrailMatOrange.disableLighting = true;
+    this.boosterTrailMatOrange.alpha = 0.8;
+
+    this.boosterTrailMatPrimary = new StandardMaterial("boosterTrailMatPrimary", this.scene);
+    this.boosterTrailMatPrimary.disableLighting = true;
+    this.boosterTrailMatPrimary.alpha = 0.8;
+
+    this.updateSharedColors();
+  }
+
+  private updateSharedColors(): void {
+    if (this.laserShellMat) this.laserShellMat.emissiveColor = this.fireColor;
+    if (this.heavyBeamMat) this.heavyBeamMat.emissiveColor = this.fireColor;
+    if (this.debrisFireMat) this.debrisFireMat.emissiveColor = this.fireColor;
+    if (this.shockwaveRingMat) this.shockwaveRingMat.emissiveColor = this.fireColor;
+    if (this.boosterTrailMatPrimary) this.boosterTrailMatPrimary.emissiveColor = this.fireColor;
+  }
+
+  private getCachedMaterial(hexColor: string, emissive: boolean, blendMode?: string): StandardMaterial {
+    const key = `${hexColor.toLowerCase()}_${emissive}_${blendMode || "normal"}`;
+    let mat = this.dynamicMatCache.get(key);
+    if (!mat) {
+      mat = new StandardMaterial("cachedFXMat_" + key, this.scene);
+      const color = Color3.FromHexString(hexColor);
+      mat.emissiveColor = color;
+      mat.diffuseColor = color;
+      mat.disableLighting = !emissive;
+      if (blendMode === "additive") {
+        mat.alphaMode = 1; // Babylon additive blend alpha mode
+      }
+      this.dynamicMatCache.set(key, mat);
+    }
+    return mat;
   }
 
   /**
@@ -104,20 +173,17 @@ export class FXSystem {
    */
   public setThemeColors(primary: Color3): void {
     this.fireColor = primary;
+    this.updateSharedColors();
   }
 
   /**
    * Spawns a physical laser ray, moving towards a heading vector
    */
   public spawnLaserShell(origin: Vector3, heading: Vector3, maxDist = 30, onHit: () => void): void {
-    const laserMat = new StandardMaterial("laserShellMat", this.scene);
-    laserMat.emissiveColor = this.fireColor;
-    laserMat.disableLighting = true;
-
     // Small capsule or elongated box pointing down the trajectory heading path
     const shell = MeshBuilder.CreateBox("laserShell", { width: 0.12, height: 0.12, depth: 0.8 }, this.scene);
     shell.position.copyFrom(origin);
-    shell.material = laserMat;
+    shell.material = this.laserShellMat;
     shell.parent = this.rootNode;
 
     // Orient mesh along traveling heading axis
@@ -137,11 +203,6 @@ export class FXSystem {
    * Draw a massive, stylized continuous rail beam showing energy connectivity
    */
   public spawnHeavyBeam(origin: Vector3, destination: Vector3): void {
-    const beamMat = new StandardMaterial("fusionBeamMat", this.scene);
-    beamMat.emissiveColor = this.fireColor;
-    beamMat.alpha = 0.95;
-    beamMat.disableLighting = true;
-
     const diff = destination.subtract(origin);
     const length = diff.length();
 
@@ -155,7 +216,7 @@ export class FXSystem {
     const midpoint = origin.add(diff.scale(0.5));
     beam.position.copyFrom(midpoint);
     beam.parent = this.rootNode;
-    beam.material = beamMat;
+    beam.material = this.heavyBeamMat;
 
     // Rotate custom cylinder to match look direction
     beam.lookAt(destination);
@@ -163,7 +224,7 @@ export class FXSystem {
 
     this.beams.push({
       mesh: beam,
-      material: beamMat,
+      material: this.heavyBeamMat,
       life: 0.25, // Fades rapid-fire (seconds)
       maxLife: 0.25,
     });
@@ -171,12 +232,12 @@ export class FXSystem {
     // Spawn tiny muzzle glow sphere
     const flashGlow = MeshBuilder.CreateSphere("muzzleGlow", { diameter: 1.2 }, this.scene);
     flashGlow.position.copyFrom(origin);
-    flashGlow.material = beamMat;
+    flashGlow.material = this.heavyBeamMat;
     flashGlow.parent = this.rootNode;
 
     this.beams.push({
       mesh: flashGlow,
-      material: beamMat,
+      material: this.heavyBeamMat,
       life: 0.15,
       maxLife: 0.15,
     });
@@ -186,21 +247,13 @@ export class FXSystem {
    * Low-poly particle explosion consisting of scattered glowing micro-cubes
    */
   public spawnExplosion(center: Vector3, numDebris = 12, multiplier = 1.0): void {
-    const fireMat = new StandardMaterial("debrisFireMat", this.scene);
-    fireMat.emissiveColor = this.fireColor;
-    fireMat.disableLighting = true;
-
-    const goldMat = new StandardMaterial("debrisGoldMat", this.scene);
-    goldMat.emissiveColor = new Color3(1.0, 0.4, 0.0); // Blazing center
-    goldMat.disableLighting = true;
-
     for (let i = 0; i < numDebris; i++) {
       const size = 0.2 + Math.random() * 0.35;
       const cube = MeshBuilder.CreateBox("debrisBox", { width: size, height: size, depth: size }, this.scene);
       cube.position.copyFrom(center);
       cube.parent = this.rootNode;
       // Alternate materials
-      cube.material = (i % 2 === 0) ? fireMat : goldMat;
+      cube.material = (i % 2 === 0) ? this.debrisFireMat : this.debrisGoldMat;
 
       // Random unit vectors
       const angle = Math.random() * Math.PI * 2;
@@ -222,10 +275,6 @@ export class FXSystem {
     }
 
     // Instant expanding shock wave ring
-    const ringMat = new StandardMaterial("shockwaveRingMat", this.scene);
-    ringMat.emissiveColor = this.fireColor;
-    ringMat.disableLighting = true;
-
     const ring = MeshBuilder.CreateTorus("shockwaveRing", {
       diameter: 0.5,
       thickness: 0.1,
@@ -233,11 +282,11 @@ export class FXSystem {
     }, this.scene);
     ring.position.copyFrom(center).addInPlace(new Vector3(0, 0.1, 0));
     ring.parent = this.rootNode;
-    ring.material = ringMat;
+    ring.material = this.shockwaveRingMat;
 
     this.beams.push({
       mesh: ring,
-      material: ringMat,
+      material: this.shockwaveRingMat,
       life: 0.3,
       maxLife: 0.3,
     });
@@ -247,18 +296,14 @@ export class FXSystem {
    * Spawns an impact spark at the projectile point
    */
   public spawnHitImpact(point: Vector3): void {
-    const mat = new StandardMaterial("impactMat", this.scene);
-    mat.emissiveColor = new Color3(1.0, 1.0, 1.0);
-    mat.disableLighting = true;
-
     const hitSpark = MeshBuilder.CreateSphere("impactSpark", { diameter: 0.65 }, this.scene);
     hitSpark.position.copyFrom(point);
-    hitSpark.material = mat;
+    hitSpark.material = this.impactMat;
     hitSpark.parent = this.rootNode;
 
     this.beams.push({
       mesh: hitSpark,
-      material: mat,
+      material: this.impactMat,
       life: 0.08,
       maxLife: 0.08,
     });
@@ -268,7 +313,7 @@ export class FXSystem {
       const spk = MeshBuilder.CreateBox("sparkLine", { width: 0.05, height: 0.05, depth: 0.25 }, this.scene);
       spk.position.copyFrom(point);
       spk.parent = this.rootNode;
-      spk.material = mat;
+      spk.material = this.impactMat;
 
       const angle = (i / 4) * Math.PI * 2 + Math.random() * 0.5;
       const vel = new Vector3(Math.cos(angle) * 8, 1, Math.sin(angle) * 8);
@@ -329,7 +374,7 @@ export class FXSystem {
           beam.mesh.scaling.set(expFactor, 1, expFactor);
         }
 
-        beam.material.alpha = progress;
+        beam.mesh.visibility = progress;
       }
     }
 
@@ -371,7 +416,7 @@ export class FXSystem {
 
         const progress = tail.life / tail.maxLife;
         tail.mesh.scaling.setAll(progress);
-        tail.material.alpha = progress * 0.8;
+        tail.mesh.visibility = progress * 0.8;
       }
     }
 
@@ -391,7 +436,7 @@ export class FXSystem {
 
         const progress = p.life / p.maxLife;
         p.mesh.scaling.setAll(progress);
-        p.material.alpha = progress;
+        p.mesh.visibility = progress;
       }
     }
 
@@ -473,7 +518,7 @@ export class FXSystem {
     }
 
     const hexColor = effect.color || "#7dfcff";
-    const color = Color3.FromHexString(hexColor);
+    const fxMat = this.getCachedMaterial(hexColor, effect.emissive !== false, effect.blendMode);
 
     const count = effect.particleCount || 40;
     const gVal = typeof effect.gravity === "number" ? effect.gravity : 0;
@@ -481,15 +526,6 @@ export class FXSystem {
     const speedVal = effect.speed || 6;
     const lifetimeVal = effect.lifetime || 0.25;
     const spreadVal = effect.spread || 0.50;
-
-    // Create a burst material
-    const fxMat = new StandardMaterial("customFXMat_" + effect.id + "_" + Date.now(), this.scene);
-    fxMat.emissiveColor = color;
-    fxMat.diffuseColor = color;
-    fxMat.disableLighting = !effect.emissive;
-    if (effect.blendMode === "additive") {
-      fxMat.alphaMode = 1; // Babylon additive blend alpha mode
-    }
 
     for (let i = 0; i < count; i++) {
       const pMesh = MeshBuilder.CreateBox("customFXParticle", { width: sizeVal, height: sizeVal, depth: sizeVal }, this.scene);
@@ -576,11 +612,7 @@ export class FXSystem {
    * Spawns a glowing engine exhaust trail drifting backwards/upwards
    */
   public spawnBoosterTrail(position: Vector3, direction: Vector3, isTorso = false): void {
-    const trailMat = new StandardMaterial("boosterTrailMat", this.scene);
-    trailMat.emissiveColor = isTorso ? this.fireColor : new Color3(1.0, 0.45, 0.0);
-    trailMat.disableLighting = true;
-    trailMat.alpha = 0.8;
-
+    const trailMat = isTorso ? this.boosterTrailMatPrimary : this.boosterTrailMatOrange;
     const size = isTorso ? (0.12 + Math.random() * 0.1) : (0.08 + Math.random() * 0.08);
     const particle = MeshBuilder.CreateBox("trailParticle", { width: size, height: size, depth: size }, this.scene);
     particle.position.copyFrom(position);

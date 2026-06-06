@@ -36,8 +36,7 @@ import {
 } from "lucide-react";
 import { GameManager } from "./game/game/GameManager";
 import { PerformanceStats, ModelAssetInfo } from "./game/types";
-import { SandboxConfigPanel } from "./components/SandboxConfigPanel";
-import { FXWorkbenchPanel } from "./components/FXWorkbenchPanel";
+import { BootSequence } from "./components/BootSequence";
 // @ts-ignore
 import menuBackgroundUrl from "./assets/images/menu_background_1780583746459.png";
 
@@ -66,17 +65,10 @@ export default function App() {
   const [selectedLibraryItem, setSelectedLibraryItem] = useState<string | null>(null);
   const [placementMode, setPlacementMode] = useState<boolean>(false);
 
-  // Navigation / Game state: "menu" | "training" | "editor" | "options"
+  // Navigation / Game state: "menu" | "training" | "options"
   // Defaulting to "menu" on load to support GitHub Pages and custom game states starting cleanly.
-  const [gameState, setGameState] = useState<"menu" | "training" | "editor" | "options">("menu");
-
-  // App mode is now a derived constant computed from the game state
-  const appMode = gameState === "editor" ? "edit" : "play";
-
-  // Custom keyword query input state
-  const [showEditorAuth, setShowEditorAuth] = useState<boolean>(false);
-  const [authKeyword, setAuthKeyword] = useState<string>("");
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [gameState, setGameState] = useState<"menu" | "training" | "options">("menu");
+  const [bootConfirmed, setBootConfirmed] = useState<boolean>(false);
 
   // PWA installer hooks
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -137,19 +129,15 @@ export default function App() {
   const [fov, setFov] = useState<number>(0.35);
   const [cameraDist, setCameraDist] = useState<number>(36);
   const [pitch, setPitch] = useState<number>(40);
-  const [activeTab, setActiveTab] = useState<"settings" | "effects" | "help" | "json" | "loadouts">("loadouts");
+  const [activeTab, setActiveTab] = useState<"settings" | "effects" | "help" | "loadouts">("loadouts");
   const [showJoystick, setShowJoystick] = useState<boolean>(true);
-  const [showTelemetry, setShowTelemetry] = useState<boolean>(true);
-  const [showCombatDebug, setShowCombatDebug] = useState<boolean>(true);
-  const [commanderCollapsed, setCommanderCollapsed] = useState<boolean>(false);
-  const [showFXWorkbench, setShowFXWorkbench] = useState<boolean>(false);
+  const [showTelemetry, setShowTelemetry] = useState<boolean>(false);
+  const [showCombatDebug, setShowCombatDebug] = useState<boolean>(false);
+  const [commanderCollapsed, setCommanderCollapsed] = useState<boolean>(true);
 
   // Souls inspired Layout states
   const [layoutUnlocked, setLayoutUnlocked] = useState<boolean>(false);
 
-  useEffect(() => {
-    setLayoutUnlocked(appMode === "edit");
-  }, [appMode]);
   const [joystickOffset, setJoystickOffset] = useState({ x: 0, y: 0 });
   const [actionsOffset, setActionsOffset] = useState({ x: 0, y: 0 });
   const [joystickSize, setJoystickSize] = useState<number>(1.0);
@@ -516,17 +504,6 @@ export default function App() {
     setCollisionRadius(0.7);
   };
 
-  const handleAuthSubmit = () => {
-    if (authKeyword.trim().toLowerCase() === "brakes") {
-      setGameState("editor");
-      setShowEditorAuth(false);
-      setAuthKeyword("");
-      setAuthError(null);
-    } else {
-      setAuthError("QUANTUM KEY UNRECOGNIZED");
-    }
-  };
-
   const handleSpawnEnemy = (enemyId: string) => {
     const gm = gameManagerRef.current;
     if (!gm || !gm.player) return;
@@ -814,148 +791,94 @@ export default function App() {
       <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0)_50%,rgba(0,0,0,0.6)_100%)] z-1" />
 
       {/* Cybernetic HUD overlay: Header Title info */}
-      <header className="absolute top-4 left-4 z-4 flex items-center justify-between pointer-events-none w-[calc(100%-2rem)]">
-        {appMode === "edit" ? (
-          <div className="pointer-events-auto flex items-center space-x-3 cyber-panel py-2 px-4 rounded-md border-white/10 bg-[#0f0f12]/90 backdrop-blur-md">
-            <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-red-600 rounded flex items-center justify-center font-bold text-black text-xs font-mono mr-1 shadow-md shadow-orange-500/20">
-              M.C
+      <header className="absolute top-4 left-4 z-4 flex items-center justify-between pointer-events-none w-[calc(105%-2rem)]">
+        <div className="pointer-events-auto flex flex-wrap items-center gap-3 md:gap-4 cyber-panel py-1.5 px-3 rounded-md border-white/10 bg-[#0a0a0d]/92 backdrop-blur-md shadow-lg">
+          {/* Collapsed Build version info */}
+          <div className="flex flex-col border-r border-white/10 pr-3">
+            <span className="text-[7px] font-mono text-slate-500 font-bold tracking-wider leading-none uppercase">SYSTEM READY</span>
+            <span className="text-[9px] font-mono font-black text-orange-500 tracking-wide mt-1">BUILD v2.4-STABLE</span>
+          </div>
+
+          {/* Quick Diagnostics Toggle */}
+          <button
+            id="telemetryToggleButton"
+            onClick={() => setShowTelemetry(!showTelemetry)}
+            className="px-1.5 py-0.5 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 text-slate-300 hover:text-white text-[8px] rounded font-mono uppercase transition-all flex items-center gap-1 cursor-pointer"
+            title="Toggle Diagnostic Overlay"
+          >
+            <Activity className="w-2 h-2 animate-pulse text-orange-400" />
+            <span>DIAG: {showTelemetry ? "ON" : "OFF"}</span>
+          </button>
+
+          {/* Combat Debug Toggle */}
+          <button
+            id="combatDebugToggleButton"
+            onClick={() => setShowCombatDebug(!showCombatDebug)}
+            className="px-1.5 py-0.5 bg-rose-500/11 hover:bg-rose-500/25 border border-rose-500/35 text-slate-300 hover:text-white text-[8px] rounded font-mono uppercase transition-all flex items-center gap-1 cursor-pointer"
+            title="Toggle Combat Debug Overlay"
+          >
+            <Cpu className="w-2 h-2 animate-pulse text-rose-450" />
+            <span>COMBAT DBG: {showCombatDebug ? "ON" : "OFF"}</span>
+          </button>
+
+          {gameState === "training" && (
+            <button
+              onClick={handleExitToMenu}
+              className="px-1.5 py-0.5 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-rose-350 hover:text-white text-[8px] rounded font-mono uppercase transition-all flex items-center gap-1 cursor-pointer"
+              title="Exit Training mode and return to main menu"
+            >
+              <span>Quit Area</span>
+            </button>
+          )}
+
+          {/* HP HUD progress bar */}
+          <div className="flex flex-col w-20 leading-none">
+            <div className="flex justify-between items-center text-[8px] font-bold text-red-500 mb-0.5">
+              <span className="flex items-center gap-0.5"><Heart className="w-2 h-2" /> HP</span>
+              <span id="topHudHpText" className="text-[8px] text-red-400">HP: --/--</span>
             </div>
-            <div className="flex flex-col">
-              <h1 className="text-sm font-mono font-bold tracking-widest text-white leading-none">2.5D MECH VERTICAL SLICE</h1>
-              <div className="flex items-center gap-2 mt-1.5">
-                <span className="px-1.5 py-0.5 bg-green-500/10 text-green-400 text-[9px] rounded border border-green-500/20 uppercase font-mono font-bold leading-none">
-                  System Stable
-                </span>
-                <span className="text-[10px] font-mono text-orange-400 uppercase tracking-tight mr-1">ENG_SYS_ACTIVE</span>
-                <button
-                  id="telemetryToggleButton"
-                  onClick={() => setShowTelemetry(!showTelemetry)}
-                  className="pointer-events-auto px-2 py-0.5 bg-orange-500/20 hover:bg-orange-500/35 border border-orange-500 text-white hover:text-orange-200 text-[9px] rounded font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer"
-                >
-                  <Activity className="w-2.5 h-2.5 animate-pulse text-orange-400" />
-                  <span>Diagnostics: {showTelemetry ? "ON" : "OFF"}</span>
-                </button>
-                {isInstallable && (
-                  <button
-                    id="pwaInstallButton"
-                    onClick={handleInstallClick}
-                    className="pointer-events-auto px-2 py-0.5 bg-blue-500/20 hover:bg-blue-500/35 border border-blue-500 text-white hover:text-blue-200 text-[9px] rounded font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer"
-                    title="Install Mech Combat Sandbox offline client"
-                  >
-                    <Download className="w-2.5 h-2.5 text-blue-400" />
-                    <span>Install Client</span>
-                  </button>
-                )}
-                <button
-                  onClick={handleExitToMenu}
-                  className="pointer-events-auto px-2 py-0.5 bg-red-500/20 hover:bg-red-500/35 border border-red-500 text-rose-350 hover:text-white text-[9px] rounded font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer"
-                  title="Quit to Main Menu"
-                >
-                  <span>Quit Area</span>
-                </button>
+            <div className="w-full bg-slate-800 rounded-sm h-[4px] overflow-hidden border border-black/20">
+              <div id="topHudHpFill" className="h-full bg-red-600 w-full transition-all duration-75 relative">
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
               </div>
             </div>
           </div>
-        ) : (
-          <div className="pointer-events-auto flex flex-wrap items-center gap-3 md:gap-4 cyber-panel py-1.5 px-3 rounded-md border-white/10 bg-[#0a0a0d]/92 backdrop-blur-md shadow-lg">
-            {/* Collapsed Build version info */}
-            <div className="flex flex-col border-r border-white/10 pr-3">
-              <span className="text-[7px] font-mono text-slate-500 font-bold tracking-wider leading-none uppercase">SYSTEM READY</span>
-              <span className="text-[9px] font-mono font-black text-orange-500 tracking-wide mt-1">BUILD v2.4-STABLE</span>
+
+          {/* Shield Armor resistance progress bar */}
+          <div className="flex flex-col w-20 leading-none">
+            <div className="flex justify-between items-center text-[8px] font-bold text-sky-450 mb-0.5">
+              <span className="flex items-center gap-0.5"><Shield className="w-2 h-2" /> AM</span>
+              <span id="topHudArmorText" className="text-[8px] text-sky-300">ARMOR: --/--</span>
             </div>
-
-            {/* Quick Diagnostics Toggle */}
-            <button
-              id="telemetryToggleButton"
-              onClick={() => setShowTelemetry(!showTelemetry)}
-              className="px-1.5 py-0.5 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 text-slate-300 hover:text-white text-[8px] rounded font-mono uppercase transition-all flex items-center gap-1 cursor-pointer"
-              title="Toggle Diagnostic Overlay"
-            >
-              <Activity className="w-2 h-2 animate-pulse text-orange-400" />
-              <span>DIAG: {showTelemetry ? "ON" : "OFF"}</span>
-            </button>
-
-            {/* Combat Debug Toggle */}
-            <button
-              id="combatDebugToggleButton"
-              onClick={() => setShowCombatDebug(!showCombatDebug)}
-              className="px-1.5 py-0.5 bg-rose-500/11 hover:bg-rose-500/25 border border-rose-500/35 text-slate-300 hover:text-white text-[8px] rounded font-mono uppercase transition-all flex items-center gap-1 cursor-pointer"
-              title="Toggle Combat Debug Overlay"
-            >
-              <Cpu className="w-2 h-2 animate-pulse text-rose-450" />
-              <span>COMBAT DBG: {showCombatDebug ? "ON" : "OFF"}</span>
-            </button>
-
-            {gameState === "training" && (
-              <button
-                onClick={handleExitToMenu}
-                className="px-1.5 py-0.5 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-rose-350 hover:text-white text-[8px] rounded font-mono uppercase transition-all flex items-center gap-1 cursor-pointer"
-                title="Exit Training mode and return to main menu"
-              >
-                <span>Quit Area</span>
-              </button>
-            )}
-
-            {/* HP HUD progress bar */}
-            <div className="flex flex-col w-20 leading-none">
-              <div className="flex justify-between items-center text-[8px] font-bold text-red-500 mb-0.5">
-                <span className="flex items-center gap-0.5"><Heart className="w-2 h-2" /> HP</span>
-                <span id="topHudHpText" className="text-[8px] text-red-400">HP: --/--</span>
-              </div>
-              <div className="w-full bg-slate-800 rounded-sm h-[4px] overflow-hidden border border-black/20">
-                <div id="topHudHpFill" className="h-full bg-red-600 w-full transition-all duration-75 relative">
-                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
-                </div>
-              </div>
-            </div>
-
-            {/* Shield Armor resistance progress bar */}
-            <div className="flex flex-col w-20 leading-none">
-              <div className="flex justify-between items-center text-[8px] font-bold text-sky-450 mb-0.5">
-                <span className="flex items-center gap-0.5"><Shield className="w-2 h-2" /> AM</span>
-                <span id="topHudArmorText" className="text-[8px] text-sky-300">ARMOR: --/--</span>
-              </div>
-              <div className="w-full bg-slate-800 rounded-sm h-[4px] overflow-hidden border border-black/20">
-                <div id="topHudArmorFill" className="h-full bg-sky-500 w-full transition-[#a1e2fc] duration-75 relative">
-                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
-                </div>
-              </div>
-            </div>
-
-            {/* EN Stamina battery progress bar */}
-            <div className="flex flex-col w-20 leading-none">
-              <div className="flex justify-between items-center text-[8px] font-bold text-emerald-450 mb-0.5">
-                <span className="flex items-center gap-0.5"><Zap className="w-2 h-2" /> EN</span>
-                <span id="topHudEnText" className="text-[8px] text-emerald-300">EN: --</span>
-              </div>
-              <div className="w-full bg-slate-800 rounded-sm h-[4px] overflow-hidden border border-black/20">
-                <div id="topHudEnFill" className="h-full bg-emerald-505 w-full transition-[#66ffb3] duration-75 relative" />
-              </div>
-            </div>
-
-            {/* Thermals Heat progress bar */}
-            <div className="flex flex-col w-16 leading-none">
-              <div className="flex justify-between items-center text-[8px] font-bold text-orange-450 mb-0.5">
-                <span className="flex items-center gap-0.5"><Crosshair className="w-2 h-2" /> HEAT</span>
-                <span id="topHudHeatText" className="text-[8px] text-orange-300">HEAT: --%</span>
-              </div>
-              <div className="w-full bg-slate-800 rounded-sm h-[4px] overflow-hidden border border-black/20">
-                <div id="topHudHeatFill" className="h-full bg-orange-500 w-full transition-all duration-75" />
+            <div className="w-full bg-slate-800 rounded-sm h-[4px] overflow-hidden border border-black/20">
+              <div id="topHudArmorFill" className="h-full bg-sky-500 w-full transition-[#a1e2fc] duration-75 relative">
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
               </div>
             </div>
           </div>
-        )}
 
-        {/* Drag & Drop Hint Overlay banner */}
-        {appMode === "edit" && (
-        <div className="hidden md:flex pointer-events-auto items-center space-x-3 cyber-panel py-2 px-4 rounded-md border-white/10 bg-[#0f0f12]/90 backdrop-blur-md">
-          <Sparkles className="w-4 h-4 text-orange-500 animate-pulse" />
-          <span className="text-xs font-mono text-orange-300">
-            DRAG & DROP <strong className="text-white font-bold font-sans">.GLB / .GLTF</strong> ON MAP TO SPAWN AS{" "}
-            <span className="text-orange-400 font-bold">{dndMode.toUpperCase()}</span>
-          </span>
+          {/* EN Stamina battery progress bar */}
+          <div className="flex flex-col w-20 leading-none">
+            <div className="flex justify-between items-center text-[8px] font-bold text-emerald-450 mb-0.5">
+              <span className="flex items-center gap-0.5"><Zap className="w-2 h-2" /> EN</span>
+              <span id="topHudEnText" className="text-[8px] text-emerald-300">EN: --</span>
+            </div>
+            <div className="w-full bg-slate-800 rounded-sm h-[4px] overflow-hidden border border-black/20">
+              <div id="topHudEnFill" className="h-full bg-emerald-505 w-full transition-[#66ffb3] duration-75 relative" />
+            </div>
+          </div>
+
+          {/* Thermals Heat progress bar */}
+          <div className="flex flex-col w-16 leading-none">
+            <div className="flex justify-between items-center text-[8px] font-bold text-orange-450 mb-0.5">
+              <span className="flex items-center gap-0.5"><Crosshair className="w-2 h-2" /> HEAT</span>
+              <span id="topHudHeatText" className="text-[8px] text-orange-300">HEAT: --%</span>
+            </div>
+            <div className="w-full bg-slate-800 rounded-sm h-[4px] overflow-hidden border border-black/20">
+              <div id="topHudHeatFill" className="h-full bg-orange-500 w-full transition-all duration-75" />
+            </div>
+          </div>
         </div>
-        )}
       </header>      {/* ---------------------------------------------------- */}
       {/* COMBAT FLIGHT DECKS (Two Corner-Anchored Flight Suites) */}
       {/* ---------------------------------------------------- */}
@@ -1219,8 +1142,8 @@ export default function App() {
           </div>
         </>
       )}
-        {/* Centered Desktop Resource dashboard (visible on desktop screen ranges in edit mode) */}
-      {appMode === "edit" && (
+        {/* Centered Desktop Resource dashboard (visible on desktop screen ranges in training/play mode) */}
+      {gameState === "training" && (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-3 pointer-events-auto select-none bg-black/75 backdrop-blur-md rounded-lg border border-white/15 p-2 px-3.5 flex flex-col space-y-1.5 w-72 shadow-2xl shadow-black max-md:hidden font-mono">
           <div className="flex items-center justify-between border-b border-white/5 pb-1">
             <div className="flex gap-1.5 items-center">
@@ -1319,7 +1242,7 @@ export default function App() {
       )}
 
       {/* Right Core Control panel sidebar */}
-      {appMode === "edit" && (
+      {gameState === "training" && (
       <div className={`absolute top-20 z-4 transition-all duration-300 ease-in-out flex items-start pointer-events-none ${
         controlsCollapsed ? "right-0 translate-x-[320px]" : "right-4 translate-x-0"
       }`}>
@@ -1399,17 +1322,6 @@ export default function App() {
               }`}
             >
               KEYS
-            </button>
-            <button
-              id="sandboxJsonButton"
-              onClick={() => setActiveTab("json")}
-              className={`p-1 px-2.5 rounded text-[10px] font-mono border transition-all cursor-pointer ${
-                activeTab === "json"
-                  ? "bg-orange-500/15 border-orange-500 text-orange-400 font-bold"
-                  : "border-white/5 text-white/50 hover:text-white"
-              }`}
-            >
-              JSON
             </button>
           </div>
         </div>
@@ -2178,55 +2090,7 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === "json" && (
-          <SandboxConfigPanel
-            theme={theme}
-            glowIntensity={glowIntensity}
-            bloomWeight={bloomWeight}
-            exposure={exposure}
-            fov={fov}
-            cameraDist={cameraDist}
-            pitch={pitch}
-            customChassisScale={customChassisScale}
-            customChassisRotation={customChassisRotation}
-            customPropsScale={customPropsScale}
-            customPropsRotation={customPropsRotation}
-            chassisOffsetX={chassisOffsetX}
-            chassisOffsetY={chassisOffsetY}
-            chassisOffsetZ={chassisOffsetZ}
-            muzzleOffsetX={muzzleOffsetX}
-            muzzleOffsetY={muzzleOffsetY}
-            muzzleOffsetZ={muzzleOffsetZ}
-            bobbingHeight={bobbingHeight}
-            bobbingSpeed={bobbingSpeed}
-            tiltPitch={tiltPitch}
-            swayRoll={swayRoll}
-            collisionRadius={collisionRadius}
-            gameManagerRef={gameManagerRef}
-            handleThemeChange={handleThemeChange}
-            handleGlowIntensityChange={handleGlowIntensityChange}
-            handleBloomWeightChange={handleBloomWeightChange}
-            handleExposureChange={handleExposureChange}
-            handleFovChange={handleFovChange}
-            handleCameraDistChange={handleCameraDistChange}
-            handlePitchChange={handlePitchChange}
-            handleCustomChassisScaleChange={handleCustomChassisScaleChange}
-            handleCustomChassisRotationChange={handleCustomChassisRotationChange}
-            handleCustomPropsScaleChange={handleCustomPropsScaleChange}
-            handleCustomPropsRotationChange={handleCustomPropsRotationChange}
-            handleChassisOffsetXChange={setChassisOffsetX}
-            handleChassisOffsetYChange={setChassisOffsetY}
-            handleChassisOffsetZChange={setChassisOffsetZ}
-            handleMuzzleOffsetXChange={setMuzzleOffsetX}
-            handleMuzzleOffsetYChange={setMuzzleOffsetY}
-            handleMuzzleOffsetZChange={setMuzzleOffsetZ}
-            handleBobbingHeightChange={setBobbingHeight}
-            handleBobbingSpeedChange={setBobbingSpeed}
-            handleTiltPitchChange={setTiltPitch}
-            handleSwayRollChange={setSwayRoll}
-            handleCollisionRadiusChange={setCollisionRadius}
-          />
-        )}
+
 
         {/* Custom drag load status panels */}
         {customAssets.length > 0 && (
@@ -2264,12 +2128,7 @@ export default function App() {
         SEC: DECK_STABILIZED // NO_DRIFT // REGISTRY: BK-77
       </div>
 
-      {showFXWorkbench && (
-        <FXWorkbenchPanel
-          gameManagerRef={gameManagerRef}
-          onClose={() => setShowFXWorkbench(false)}
-        />
-      )}
+
 
       {/* TRAINING COMMAND FLIGHT DECK */}
       {gameState === "training" && (
@@ -2504,24 +2363,6 @@ export default function App() {
                 </span>
               </button>
 
-              {/* EDITOR (Orange/Amber with verification code) */}
-              <button
-                onClick={() => {
-                  setShowEditorAuth(true);
-                  setAuthError(null);
-                  setAuthKeyword("");
-                }}
-                className="group relative flex items-center justify-between p-3 rounded border border-orange-500/40 hover:border-orange-400 bg-orange-950/25 hover:bg-orange-950/45 text-orange-200 hover:text-white uppercase font-mono text-xs tracking-widest text-left cursor-pointer shadow-[0_0_12px_rgba(249,115,22,0.15)] hover:shadow-[0_0_20px_rgba(249,115,22,0.3)] transition-all"
-              >
-                <span className="font-bold flex items-center space-x-2">
-                  <span className="text-orange-400 group-hover:translate-x-1 transition-transform">⚙</span>
-                  <span className="tracking-widest">Editor Mode</span>
-                </span>
-                <span className="text-[8px] px-1.5 py-0.5 border border-orange-500/35 text-orange-400 font-bold rounded bg-orange-950/40">
-                  SELECTABLE
-                </span>
-              </button>
-
               {/* GITHUB REPOSITORY */}
               <button
                 onClick={() => {
@@ -2539,64 +2380,6 @@ export default function App() {
               </button>
             </div>
           </div>
-
-          {/* Code word auth modal */}
-          {showEditorAuth && (
-            <div className="absolute inset-0 z-50 bg-[#040406]/92 backdrop-blur-sm flex items-center justify-center p-4">
-              <div className="flex flex-col space-y-4 p-6 bg-[#0c0c11] border-2 border-orange-500/60 rounded-xl shadow-[0_0_40px_rgba(249,115,22,0.3)] w-full max-w-sm text-center animate-fade-in font-mono border-double">
-                <div className="flex items-center justify-center space-x-1.5 text-orange-400">
-                  <span className="text-sm animate-pulse">✦</span>
-                  <h3 className="text-xs font-bold uppercase tracking-[0.25em]">DEC_KEY AUTHORIZATION</h3>
-                  <span className="text-sm animate-pulse">✦</span>
-                </div>
-                
-                <p className="text-[9px] text-white/50 leading-relaxed uppercase">
-                  CONFIRM QUANTUM KEYWORD DECRYPT KEY TO OVERRIDE SANDBOX SUITE INTEGRATION:
-                </p>
-
-                <div className="space-y-1.5">
-                  <input
-                    type="password"
-                    placeholder="ENTER CODE WORD"
-                    value={authKeyword}
-                    onChange={(e) => {
-                      setAuthKeyword(e.target.value);
-                      setAuthError(null);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleAuthSubmit();
-                    }}
-                    className="w-full bg-black/90 text-orange-400 placeholder-orange-950 border border-orange-500/50 rounded p-2 text-center text-xs tracking-[0.25em] font-bold focus:outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-400 transition-all font-mono uppercase"
-                    autoFocus
-                  />
-                  {authError && (
-                    <div className="text-rose-500 text-[9px] uppercase font-bold tracking-wider bg-rose-950/20 border border-rose-500/30 py-1 rounded animate-pulse">
-                      {authError}
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex space-x-3 pt-1">
-                  <button
-                    onClick={() => {
-                      setShowEditorAuth(false);
-                      setAuthKeyword("");
-                      setAuthError(null);
-                    }}
-                    className="w-1/2 p-2 text-[10px] font-bold border border-white/10 hover:border-white/30 text-white/40 hover:text-white uppercase rounded cursor-pointer transition-all rounded-md"
-                  >
-                    Abort
-                  </button>
-                  <button
-                    onClick={handleAuthSubmit}
-                    className="w-1/2 p-2 text-[10px] bg-orange-600 hover:bg-orange-500 text-black border border-orange-500 uppercase rounded cursor-pointer transition-all font-bold rounded-md shadow-md shadow-orange-600/10"
-                  >
-                    Authorize
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>

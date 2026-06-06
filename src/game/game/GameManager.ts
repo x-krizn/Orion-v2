@@ -353,9 +353,13 @@ export class GameManager {
    * Translates 2D screen mouse position into 3D world rays resting on our floor plane
    */
   public get3DWorldPointerPos(): Vector3 {
-    // If we have an active, fully locked-on target, prioritize firing at it directly!
-    if (this.lockedTargets.length > 0 && this.lockedTargets[0].progress >= 1.0) {
-      return this.lockedTargets[0].enemy.node.position;
+    // If we have an active locked target, prioritize firing at its vertical center!
+    if (this.lockedTargets.length > 0) {
+      const enemy = this.lockedTargets[0].enemy;
+      const enemyScale = enemy.data?.scale || 1.0;
+      const targetPoint = enemy.node.position.clone();
+      targetPoint.y = 0.8 * enemyScale;
+      return targetPoint;
     }
 
     const pickInfo = this.scene.pick(this.scene.pointerX, this.scene.pointerY, (mesh) => mesh.name === "cyberGround");
@@ -1046,8 +1050,12 @@ export class GameManager {
     }
 
     // 3. Set independent aiming position based on locked target or cursor/persistent touch tap
-    if (this.lockedTargets.length > 0 && this.lockedTargets[0].progress >= 1.0) {
-      this.player.setAimPoint(this.lockedTargets[0].enemy.node.position);
+    if (this.lockedTargets.length > 0) {
+      const enemy = this.lockedTargets[0].enemy;
+      const enemyScale = enemy.data?.scale || 1.0;
+      const targetPoint = enemy.node.position.clone();
+      targetPoint.y = 0.8 * enemyScale;
+      this.player.setAimPoint(targetPoint);
     } else if (this.persistentAimDirection) {
       this.player.setAimPoint(this.player.getPosition().add(this.persistentAimDirection.scale(10.0)));
     } else {
