@@ -791,10 +791,6 @@ export class GameManager {
    * Setup Drag & Drop handlers to capture GLTF/GLB local structures directly
    */
   private registerDragAndDrop(): void {
-    const urlParams = new URL(window.location.href).searchParams;
-    const isEditMode = urlParams.get("mode") === "edit";
-    if (!isEditMode) return;
-
     const dropZone = window;
 
     dropZone.addEventListener("dragover", (e) => {

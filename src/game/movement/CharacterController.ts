@@ -151,6 +151,8 @@ export class CharacterController {
   private aimPoint: Vector3 | null = null;
 
   // Lists for custom meshes detected on user uploaded warrior models
+  private customFrameUpper: TransformNode | null = null;
+  private customFrameLower: TransformNode | null = null;
   private customEyeGlowMeshes: Mesh[] = [];
   private customBoosterMeshes: Mesh[] = [];
   private customDashBoosterMeshes: Mesh[] = [];
@@ -261,7 +263,7 @@ export class CharacterController {
 
     // Instantiate decoupled upper Torso Assembly
     this.torsoAssembly = new TransformNode("mechTorsoAssembly", this.scene);
-    this.torsoAssembly.parent = this.proceduralVisualsRoot;
+    this.torsoAssembly.parent = this.rootNode;
 
     // 1. Torso/Chassis (Prism/Box combo)
     const torso = MeshBuilder.CreateBox("mechTorso", { width: 1.6, height: 1.2, depth: 1.2 }, this.scene);
@@ -358,6 +360,25 @@ export class CharacterController {
         this.customModelNode.dispose();
         this.customModelNode = null;
       }
+      if (this.customFrameUpper) {
+        this.customFrameUpper.dispose();
+        this.customFrameUpper = null;
+      }
+      if (this.customFrameLower) {
+        this.customFrameLower.dispose();
+        this.customFrameLower = null;
+      }
+    }
+
+    // Toggle procedural children count on decoupled assembly safely
+    if (this.torsoAssembly) {
+      this.torsoAssembly.getChildren().forEach(child => {
+        if (child !== this.customFrameUpper) {
+          if (child instanceof TransformNode || child instanceof Mesh) {
+            child.setEnabled(!hide);
+          }
+        }
+      });
     }
   }
 
@@ -407,15 +428,20 @@ export class CharacterController {
     if (this.customModelNode) {
       this.customModelNode.dispose();
     }
+    if (this.customFrameUpper) {
+      this.customFrameUpper.dispose();
+      this.customFrameUpper = null;
+    }
+    if (this.customFrameLower) {
+      this.customFrameLower.dispose();
+      this.customFrameLower = null;
+    }
     
     this.hideProceduralModel(true);
     
     this.customModelNode = node;
     this.customModelNode.parent = this.rootNode;
     this.customModelNode.position.set(0, 0, 0);
-
-    // Trigger socket discovery scan on the newly loaded custom model
-    this.socketManager.discoverSockets(node);
 
     // Track original transform parameters before applying dynamic offsets
     this.originalBaseScale.copyFrom(this.customModelNode.scaling);
@@ -447,8 +473,51 @@ export class CharacterController {
     this.customScaleMultiplier = 1.0;
     this.customRotationYOffset = Math.PI; // Default to 180 degrees rotation (Math.PI radians) to face forward
 
-    // Apply scaling, offset and rotation transformations
-    this.applyCustomModelTransforms();
+    // Scan recursively for frame_upper and frame_lower separation
+    let frameUpper: TransformNode | null = null;
+    let frameLower: TransformNode | null = null;
+
+    const findFrames = (n: any) => {
+      if (!n) return;
+      const nameLower = n.name ? n.name.toLowerCase() : "";
+      if (nameLower.includes("frame_upper")) {
+        frameUpper = n;
+      } else if (nameLower.includes("frame_lower")) {
+        frameLower = n;
+      }
+      const children = n.getChildren ? n.getChildren() : [];
+      for (const child of children) {
+        findFrames(child);
+      }
+    };
+    findFrames(node);
+
+    if (frameUpper && frameLower) {
+      console.log(`[Asset Integration]: Decoupling modular mech frame_upper and frame_lower...`);
+      this.customFrameUpper = frameUpper;
+      this.customFrameLower = frameLower;
+
+      this.customFrameUpper.setParent(this.torsoAssembly);
+      this.customFrameLower.setParent(this.rootNode);
+
+      this.customFrameUpper.position.set(0, 0, 0);
+      this.customFrameLower.position.set(0, 0, 0);
+      this.customFrameUpper.rotation.set(0, 0, 0);
+      this.customFrameLower.rotation.set(0, 0, 0);
+
+      const finalFactor = this.autoScaleFactor * this.customScaleMultiplier;
+      this.customFrameUpper.scaling.set(finalFactor, finalFactor, finalFactor);
+      this.customFrameLower.scaling.set(finalFactor, finalFactor, finalFactor);
+
+      // We disable the imported root node representation so only decoupled components are rendered
+      this.customModelNode.setEnabled(false);
+      this.customModelNode.visibility = 0.0;
+    } else {
+      this.applyCustomModelTransforms();
+    }
+
+    // Trigger socket discovery scan on the newly loaded custom model (register under root entity)
+    this.socketManager.discoverSockets(this.rootNode);
 
     // Reset lists of special custom meshes before scanning
     this.customEyeGlowMeshes = [];
@@ -459,19 +528,29 @@ export class CharacterController {
 
     // Detect character theme color from model's emissive features (e.g. eyes/glow/visors)
     let detectedThemeColor: Color3 | null = null;
-    node.getChildMeshes().forEach(mesh => {
-      const mat = mesh.material as StandardMaterial;
-      if (mat) {
-        const meshName = mesh.name.toLowerCase();
-        if (meshName.includes("glow") || meshName.includes("visor") || meshName.includes("eye") || meshName.includes("booster")) {
-          if (mat.emissiveColor && (mat.emissiveColor.r > 0.05 || mat.emissiveColor.g > 0.05 || mat.emissiveColor.b > 0.05)) {
-            detectedThemeColor = mat.emissiveColor.clone();
-          } else if (mat.diffuseColor && (mat.diffuseColor.r > 0.05 || mat.diffuseColor.g > 0.05 || mat.diffuseColor.b > 0.05)) {
-            detectedThemeColor = mat.diffuseColor.clone();
+
+    const scanThemeAndMeshes = (n: any) => {
+      if (!n) return;
+      if (n instanceof Mesh) {
+        const mesh = n;
+        const mat = mesh.material as StandardMaterial;
+        if (mat) {
+          const meshName = mesh.name.toLowerCase();
+          if (meshName.includes("glow") || meshName.includes("visor") || meshName.includes("eye") || meshName.includes("booster")) {
+            if (mat.emissiveColor && (mat.emissiveColor.r > 0.05 || mat.emissiveColor.g > 0.05 || mat.emissiveColor.b > 0.05)) {
+              detectedThemeColor = mat.emissiveColor.clone();
+            } else if (mat.diffuseColor && (mat.diffuseColor.r > 0.05 || mat.diffuseColor.g > 0.05 || mat.diffuseColor.b > 0.05)) {
+              detectedThemeColor = mat.diffuseColor.clone();
+            }
           }
         }
       }
-    });
+      const children = n.getChildren ? n.getChildren() : [];
+      for (const child of children) {
+        scanThemeAndMeshes(child);
+      }
+    };
+    scanThemeAndMeshes(node);
 
     if (detectedThemeColor) {
       console.log(`[Asset Integration]: Detected custom theme color from model:`, (detectedThemeColor as Color3).toHexString());
@@ -486,65 +565,160 @@ export class CharacterController {
       .map(light => light.getShadowGenerator())
       .filter((g): g is ShadowGenerator => g !== null);
 
-    node.getChildMeshes().forEach(mesh => {
-      mesh.receiveShadows = true;
+    const setupMeshesAndShadows = (n: any) => {
+      if (!n) return;
+      if (n instanceof Mesh) {
+        const mesh = n;
+        mesh.receiveShadows = true;
+        const meshName = mesh.name.toLowerCase();
+        let isSpecialMesh = false;
 
-      const meshName = mesh.name.toLowerCase();
-      let isSpecialMesh = false;
+        // Scan for weapon/arm/gun components based on naming
+        if (meshName.includes("left") && (meshName.includes("gun") || meshName.includes("arm") || meshName.includes("weapon") || meshName.includes("barrel") || meshName.includes("muzzle") || meshName.includes("cannon") || meshName.includes("laser") || meshName.includes("shooter"))) {
+          this.customLeftGunArm = mesh;
+        } else if (meshName.includes("right") && (meshName.includes("gun") || meshName.includes("arm") || meshName.includes("weapon") || meshName.includes("barrel") || meshName.includes("muzzle") || meshName.includes("cannon") || meshName.includes("laser") || meshName.includes("shooter"))) {
+          this.customRightGunArm = mesh;
+        }
 
-      // Scan for weapon/arm/gun components based on naming
-      if (meshName.includes("left") && (meshName.includes("gun") || meshName.includes("arm") || meshName.includes("weapon") || meshName.includes("barrel") || meshName.includes("muzzle") || meshName.includes("cannon") || meshName.includes("laser") || meshName.includes("shooter"))) {
-        this.customLeftGunArm = mesh as Mesh;
-      } else if (meshName.includes("right") && (meshName.includes("gun") || meshName.includes("arm") || meshName.includes("weapon") || meshName.includes("barrel") || meshName.includes("muzzle") || meshName.includes("cannon") || meshName.includes("laser") || meshName.includes("shooter"))) {
-        this.customRightGunArm = mesh as Mesh;
+        if (meshName.includes("eyeglow") || (meshName.includes("eye") && meshName.includes("glow"))) {
+          this.customEyeGlowMeshes.push(mesh);
+          this.applyGlowColor(mesh, this.activeThemeColor);
+          mesh.setEnabled(true);
+          mesh.visibility = 1.0;
+          isSpecialMesh = true;
+        } else if (meshName.includes("dash") && (meshName.includes("thruster") || meshName.includes("booster") || meshName.includes("jet") || meshName.includes("effect"))) {
+          this.customDashBoosterMeshes.push(mesh);
+          this.applyGlowColor(mesh, new Color3(1.0, 0.35, 0.0).add(this.activeThemeColor).scale(0.5));
+          mesh.setEnabled(false); // Hide dash specific boosters initially
+          mesh.visibility = 1.0;
+          isSpecialMesh = true;
+        } else if (meshName.includes("booster") || meshName.includes("thruster") || meshName.includes("jet")) {
+          this.customBoosterMeshes.push(mesh);
+          this.applyGlowColor(mesh, this.activeThemeColor);
+          mesh.setEnabled(false); // Hide boosters initially
+          mesh.visibility = 1.0;
+          isSpecialMesh = true;
+        }
+
+        if (!isSpecialMesh) {
+          mesh.setEnabled(true);
+          mesh.visibility = 1.0;
+        }
+
+        shadowGenerators.forEach(sg => {
+          sg.addShadowCaster(mesh);
+        });
       }
 
-      if (meshName.includes("eyeglow") || (meshName.includes("eye") && meshName.includes("glow"))) {
-        this.customEyeGlowMeshes.push(mesh as Mesh);
-        this.applyGlowColor(mesh as Mesh, this.activeThemeColor);
-        mesh.setEnabled(true);
-        mesh.visibility = 1.0;
-        isSpecialMesh = true;
-      } else if (meshName.includes("dash") && (meshName.includes("thruster") || meshName.includes("booster") || meshName.includes("jet") || meshName.includes("effect"))) {
-        this.customDashBoosterMeshes.push(mesh as Mesh);
-        this.applyGlowColor(mesh as Mesh, new Color3(1.0, 0.35, 0.0).add(this.activeThemeColor).scale(0.5));
-        mesh.setEnabled(false); // Hide dash specific boosters initially
-        mesh.visibility = 1.0;
-        isSpecialMesh = true;
-      } else if (meshName.includes("booster") || meshName.includes("thruster") || meshName.includes("jet")) {
-        this.customBoosterMeshes.push(mesh as Mesh);
-        this.applyGlowColor(mesh as Mesh, this.activeThemeColor);
-        mesh.setEnabled(false); // Hide boosters initially
-        mesh.visibility = 1.0;
-        isSpecialMesh = true;
+      const children = n.getChildren ? n.getChildren() : [];
+      for (const child of children) {
+        setupMeshesAndShadows(child);
       }
-
-      if (!isSpecialMesh) {
-        mesh.setEnabled(true);
-        mesh.visibility = 1.0;
-      }
-
-      shadowGenerators.forEach(sg => {
-        sg.addShadowCaster(mesh);
-      });
-    });
+    };
+    setupMeshesAndShadows(node);
 
     // Fallback search by relative side-coordinates if some arm meshes were found without left/right naming
     if (!this.customLeftGunArm || !this.customRightGunArm) {
-      node.getChildMeshes().forEach(mesh => {
-        const meshName = mesh.name.toLowerCase();
-        if (meshName.includes("gun") || meshName.includes("weapon") || meshName.includes("barrel") || meshName.includes("muzzle") || meshName.includes("cannon") || meshName.includes("laser") || meshName.includes("shooter")) {
-          mesh.computeWorldMatrix(true);
-          // Get local position relative to the main chassis
-          const localPos = Vector3.TransformCoordinates(mesh.getAbsolutePosition(), node.getWorldMatrix().clone().invert());
-          if (localPos.x < -0.15) {
-            if (!this.customLeftGunArm) this.customLeftGunArm = mesh as Mesh;
-          } else if (localPos.x > 0.15) {
-            if (!this.customRightGunArm) this.customRightGunArm = mesh as Mesh;
+      const scanCoords = (n: any) => {
+        if (!n) return;
+        if (n instanceof Mesh) {
+          const meshName = n.name.toLowerCase();
+          if (meshName.includes("gun") || meshName.includes("weapon") || meshName.includes("barrel") || meshName.includes("muzzle") || meshName.includes("cannon") || meshName.includes("laser") || meshName.includes("shooter")) {
+            n.computeWorldMatrix(true);
+            const localPos = Vector3.TransformCoordinates(n.getAbsolutePosition(), node.getWorldMatrix().clone().invert());
+            if (localPos.x < -0.15) {
+              if (!this.customLeftGunArm) this.customLeftGunArm = n;
+            } else if (localPos.x > 0.15) {
+              if (!this.customRightGunArm) this.customRightGunArm = n;
+            }
           }
         }
-      });
+        const children = n.getChildren ? n.getChildren() : [];
+        for (const child of children) {
+          scanCoords(child);
+        }
+      };
+      scanCoords(node);
     }
+
+    // Enforce initial loadout visibilities
+    this.updateEquipmentVisibility("pulse_cannon");
+  }
+
+  /**
+   * Scans socket subtrees and renders only the currently equipped weapons, aux, etc.
+   */
+  public updateEquipmentVisibility(equippedWeaponId: string): void {
+    if (!this.customModelNode) return;
+
+    // Default equipped weapon variant name from the mech kit
+    let activeWeaponName = "weapon_gatling_brushcutter";
+    if (equippedWeaponId.toLowerCase().includes("pulse") || equippedWeaponId.toLowerCase().includes("vortex") || equippedWeaponId.toLowerCase().includes("lance")) {
+      activeWeaponName = "weapon_rifle_gladius";
+    }
+
+    const showItem = (lower: string): boolean => {
+      // Standard chassis features are always shown
+      if (lower.startsWith("warrior_core_front") || 
+          lower.startsWith("warrior_core_rear") || 
+          lower.startsWith("warrior_helm") || 
+          lower.startsWith("warrior_arm_01") || 
+          lower.startsWith("warrior_arm_02") || 
+          lower.startsWith("warrior_waist") || 
+          lower.startsWith("warrior_leg_01") || 
+          lower.startsWith("warrior_leg_02") ||
+          lower.startsWith("warrior_aux_01") ||
+          lower.startsWith("warrior_aux_02") ||
+          lower.startsWith("warrior_aux_03") ||
+          lower.startsWith("warrior_aux_04")) {
+        return true;
+      }
+
+      // Handle weapon options swapping
+      if (lower.startsWith("weapon_rifle_gladius")) {
+        return activeWeaponName === "weapon_rifle_gladius";
+      }
+      if (lower.startsWith("weapon_gatling_brushcutter")) {
+        return activeWeaponName === "weapon_gatling_brushcutter";
+      }
+
+      // Auxiliary weapons and launchers
+      if (lower.startsWith("pilum_01")) {
+        return true; // render equipped launcher
+      }
+      if (lower.startsWith("aux_02_launcher_mauler")) {
+        return true; // render equipped auxiliary launcher
+      }
+
+      // Melee options
+      if (lower.startsWith("melee_siegebreaker")) {
+        return true; // render cool melee back-mount piece
+      }
+      if (lower.startsWith("melee_khopesh")) {
+        return false;
+      }
+
+      return true;
+    };
+
+    const applyVisibility = (n: any) => {
+      if (!n) return;
+      if (n instanceof Mesh) {
+        const lowerName = n.name.toLowerCase();
+        const shouldShow = showItem(lowerName);
+        n.setEnabled(shouldShow);
+        n.visibility = shouldShow ? 1.0 : 0.0;
+      }
+      const children = n.getChildren ? n.getChildren() : [];
+      for (const child of children) {
+        applyVisibility(child);
+      }
+    };
+
+    // Apply visibility overrides across root and decouple assemblies
+    applyVisibility(this.customModelNode);
+    if (this.customFrameUpper) applyVisibility(this.customFrameUpper);
+    if (this.customFrameLower) applyVisibility(this.customFrameLower);
   }
 
   /**
@@ -1028,7 +1202,29 @@ export class CharacterController {
     }
 
     // Add high-fidelity dynamic floating bobbing and tilting animations for custom mech models
-    if (this.customModelNode) {
+    if (this.customFrameUpper && this.customFrameLower) {
+      const finalFactor = this.autoScaleFactor * this.customScaleMultiplier;
+      this.customFrameUpper.scaling.set(finalFactor, finalFactor, finalFactor);
+      this.customFrameLower.scaling.set(finalFactor, finalFactor, finalFactor);
+
+      // Hovering vertical float bob for lower body
+      const bobbingFactor = Math.sin(this.pulseTimer * this.customBobbingSpeed) * this.customBobbingHeight;
+      this.customFrameLower.position.set(0, bobbingFactor, 0);
+
+      // Tilting pitches and roll sways for upper body
+      let tiltPitch = 0;
+      let tiltRoll = 0;
+      const isMoving = input.moveDirection.length() > 0;
+      if (isMoving) {
+        tiltPitch = this.customTiltPitch;
+        tiltRoll = Math.sin(this.pulseTimer * 1.5 * this.customBobbingSpeed) * this.customSwayRoll;
+      } else if (this.isDashing) {
+        tiltPitch = this.customTiltPitch * 2.0;
+      }
+
+      this.customFrameUpper.position.set(0, bobbingFactor * 0.5, 0);
+      this.customFrameUpper.rotation.set(tiltPitch, 0, tiltRoll);
+    } else if (this.customModelNode) {
       // Hovering bobbing float on y-axis (adds beautiful metallic floating feeling)
       const bobbingFactor = Math.sin(this.pulseTimer * this.customBobbingSpeed) * this.customBobbingHeight; 
       
