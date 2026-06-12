@@ -37,10 +37,10 @@ async function startServer() {
     }
     console.log(`[Server]: Received persistent upload request for asset: ${fileName}`);
     let targetPath = "";
-    if (fileName === "warriorTest.glb") {
-      targetPath = import_path.default.join(process.cwd(), "public", "assets", "models", "mechs", "warriorTest.glb");
-    } else if (fileName === "enviroTest.glb") {
-      targetPath = import_path.default.join(process.cwd(), "public", "assets", "tiles", "enviroTest.glb");
+    if (fileName === "warriorTest.glb" || fileName === "mech_frame.glb") {
+      targetPath = import_path.default.join(process.cwd(), "public", "assets", "models", "mechs", fileName);
+    } else if (fileName === "enviroTest.glb" || fileName === "bog_enviro.glb") {
+      targetPath = import_path.default.join(process.cwd(), "public", "assets", "tiles", fileName);
     } else {
       console.warn(`[Server]: Unrecognized or restricted file upload target: ${fileName}`);
       return res.status(400).json({ error: "Invalid or restricted asset filename for direct workspace sync." });
@@ -62,6 +62,7 @@ async function startServer() {
     res.json({ status: "ok" });
   });
   if (process.env.NODE_ENV !== "production") {
+    app.use(import_express.default.static(import_path.default.join(process.cwd(), "public")));
     const vite = await (0, import_vite.createServer)({
       server: { middlewareMode: true },
       appType: "spa"
