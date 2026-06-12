@@ -168,6 +168,17 @@ export class CharacterController {
   private originalBaseQuaternion: Quaternion | null = null;
   private baseOffsetPos = new Vector3(0, 0, 0);
   private autoScaleFactor = 1.0;
+
+  // Decoupled base transforms right after setParent mapping
+  private decoupledFrameUpperBasePosition = new Vector3(0, 0, 0);
+  private decoupledFrameUpperBaseRotation = new Vector3(0, 0, 0);
+  private decoupledFrameUpperBaseQuaternion: Quaternion | null = null;
+  private decoupledFrameUpperBaseScaling = new Vector3(1, 1, 1);
+
+  private decoupledFrameLowerBasePosition = new Vector3(0, 0, 0);
+  private decoupledFrameLowerBaseRotation = new Vector3(0, 0, 0);
+  private decoupledFrameLowerBaseQuaternion: Quaternion | null = null;
+  private decoupledFrameLowerBaseScaling = new Vector3(1, 1, 1);
   
   public customScaleMultiplier = 1.0;
   public customRotationYOffset = 0.0;
@@ -500,18 +511,77 @@ export class CharacterController {
       this.customFrameUpper.setParent(this.torsoAssembly);
       this.customFrameLower.setParent(this.rootNode);
 
-      this.customFrameUpper.position.set(0, 0, 0);
-      this.customFrameLower.position.set(0, 0, 0);
-      this.customFrameUpper.rotation.set(0, 0, 0);
-      this.customFrameLower.rotation.set(0, 0, 0);
+      // Capture and store the perfect relative local base transforms derived by setParent
+      this.decoupledFrameUpperBasePosition.copyFrom(this.customFrameUpper.position);
+      this.decoupledFrameUpperBaseScaling.copyFrom(this.customFrameUpper.scaling);
+      if (this.customFrameUpper.rotationQuaternion) {
+        this.decoupledFrameUpperBaseQuaternion = this.customFrameUpper.rotationQuaternion.clone();
+      } else {
+        this.decoupledFrameUpperBaseRotation.copyFrom(this.customFrameUpper.rotation);
+        this.decoupledFrameUpperBaseQuaternion = null;
+      }
 
+      this.decoupledFrameLowerBasePosition.copyFrom(this.customFrameLower.position);
+      this.decoupledFrameLowerBaseScaling.copyFrom(this.customFrameLower.scaling);
+      if (this.customFrameLower.rotationQuaternion) {
+        this.decoupledFrameLowerBaseQuaternion = this.customFrameLower.rotationQuaternion.clone();
+      } else {
+        this.decoupledFrameLowerBaseRotation.copyFrom(this.customFrameLower.rotation);
+        this.decoupledFrameLowerBaseQuaternion = null;
+      }
+
+      // Now apply initial positioning, scaling and rotations based on these accurate base transforms
       const finalFactor = this.autoScaleFactor * this.customScaleMultiplier;
-      this.customFrameUpper.scaling.set(finalFactor, finalFactor, finalFactor);
-      this.customFrameLower.scaling.set(finalFactor, finalFactor, finalFactor);
+      const rawOffsetHeight = -bounds.min.y;
+
+      this.customFrameUpper.position.set(
+        (this.decoupledFrameUpperBasePosition.x + this.customOffsetX) * finalFactor,
+        (this.decoupledFrameUpperBasePosition.y + rawOffsetHeight + this.customOffsetY) * finalFactor,
+        (this.decoupledFrameUpperBasePosition.z + this.customOffsetZ) * finalFactor
+      );
+      this.customFrameLower.position.set(
+        (this.decoupledFrameLowerBasePosition.x + this.customOffsetX) * finalFactor,
+        (this.decoupledFrameLowerBasePosition.y + rawOffsetHeight + this.customOffsetY) * finalFactor,
+        (this.decoupledFrameLowerBasePosition.z + this.customOffsetZ) * finalFactor
+      );
+
+      this.customFrameUpper.scaling.set(
+        this.decoupledFrameUpperBaseScaling.x * finalFactor,
+        this.decoupledFrameUpperBaseScaling.y * finalFactor,
+        this.decoupledFrameUpperBaseScaling.z * finalFactor
+      );
+      this.customFrameLower.scaling.set(
+        this.decoupledFrameLowerBaseScaling.x * finalFactor,
+        this.decoupledFrameLowerBaseScaling.y * finalFactor,
+        this.decoupledFrameLowerBaseScaling.z * finalFactor
+      );
+
+      // Maintain GLB upright mapping plus custom Y rotation
+      const extraRot = Quaternion.RotationYawPitchRoll(this.customRotationYOffset, 0, 0);
+      if (this.decoupledFrameUpperBaseQuaternion) {
+        this.customFrameUpper.rotationQuaternion = this.decoupledFrameUpperBaseQuaternion.multiply(extraRot);
+      } else {
+        this.customFrameUpper.rotationQuaternion = null;
+        this.customFrameUpper.rotation.set(
+          this.decoupledFrameUpperBaseRotation.x,
+          this.decoupledFrameUpperBaseRotation.y + this.customRotationYOffset,
+          this.decoupledFrameUpperBaseRotation.z
+        );
+      }
+
+      if (this.decoupledFrameLowerBaseQuaternion) {
+        this.customFrameLower.rotationQuaternion = this.decoupledFrameLowerBaseQuaternion.multiply(extraRot);
+      } else {
+        this.customFrameLower.rotationQuaternion = null;
+        this.customFrameLower.rotation.set(
+          this.decoupledFrameLowerBaseRotation.x,
+          this.decoupledFrameLowerBaseRotation.y + this.customRotationYOffset,
+          this.decoupledFrameLowerBaseRotation.z
+        );
+      }
 
       // We disable the imported root node representation so only decoupled components are rendered
       this.customModelNode.setEnabled(false);
-      this.customModelNode.visibility = 0.0;
     } else {
       this.applyCustomModelTransforms();
     }
@@ -1204,12 +1274,26 @@ export class CharacterController {
     // Add high-fidelity dynamic floating bobbing and tilting animations for custom mech models
     if (this.customFrameUpper && this.customFrameLower) {
       const finalFactor = this.autoScaleFactor * this.customScaleMultiplier;
-      this.customFrameUpper.scaling.set(finalFactor, finalFactor, finalFactor);
-      this.customFrameLower.scaling.set(finalFactor, finalFactor, finalFactor);
+      const rawOffsetHeight = this.autoScaleFactor > 0.01 ? (this.baseOffsetPos.y / this.autoScaleFactor) : 0.0;
+      
+      this.customFrameUpper.scaling.set(
+        this.decoupledFrameUpperBaseScaling.x * finalFactor,
+        this.decoupledFrameUpperBaseScaling.y * finalFactor,
+        this.decoupledFrameUpperBaseScaling.z * finalFactor
+      );
+      this.customFrameLower.scaling.set(
+        this.decoupledFrameLowerBaseScaling.x * finalFactor,
+        this.decoupledFrameLowerBaseScaling.y * finalFactor,
+        this.decoupledFrameLowerBaseScaling.z * finalFactor
+      );
 
       // Hovering vertical float bob for lower body
       const bobbingFactor = Math.sin(this.pulseTimer * this.customBobbingSpeed) * this.customBobbingHeight;
-      this.customFrameLower.position.set(0, bobbingFactor, 0);
+      this.customFrameLower.position.set(
+        (this.decoupledFrameLowerBasePosition.x + this.customOffsetX) * finalFactor,
+        (this.decoupledFrameLowerBasePosition.y + rawOffsetHeight + this.customOffsetY) * finalFactor + bobbingFactor,
+        (this.decoupledFrameLowerBasePosition.z + this.customOffsetZ) * finalFactor
+      );
 
       // Tilting pitches and roll sways for upper body
       let tiltPitch = 0;
@@ -1222,8 +1306,37 @@ export class CharacterController {
         tiltPitch = this.customTiltPitch * 2.0;
       }
 
-      this.customFrameUpper.position.set(0, bobbingFactor * 0.5, 0);
-      this.customFrameUpper.rotation.set(tiltPitch, 0, tiltRoll);
+      this.customFrameUpper.position.set(
+        (this.decoupledFrameUpperBasePosition.x + this.customOffsetX) * finalFactor,
+        (this.decoupledFrameUpperBasePosition.y + rawOffsetHeight + this.customOffsetY) * finalFactor + bobbingFactor * 0.5,
+        (this.decoupledFrameUpperBasePosition.z + this.customOffsetZ) * finalFactor
+      );
+
+      // Rotation for lower body Frame (combining original GLB mapping + custom slider offsets)
+      const extraRotLower = Quaternion.RotationYawPitchRoll(this.customRotationYOffset, 0, 0);
+      if (this.decoupledFrameLowerBaseQuaternion) {
+        this.customFrameLower.rotationQuaternion = this.decoupledFrameLowerBaseQuaternion.multiply(extraRotLower);
+      } else {
+        this.customFrameLower.rotationQuaternion = null;
+        this.customFrameLower.rotation.set(
+          this.decoupledFrameLowerBaseRotation.x,
+          this.decoupledFrameLowerBaseRotation.y + this.customRotationYOffset,
+          this.decoupledFrameLowerBaseRotation.z
+        );
+      }
+
+      // Rotation for upper body Frame (combining original GLB mapping + custom slider offsets + dynamic pitch/roll sways)
+      const extraRotUpper = Quaternion.RotationYawPitchRoll(this.customRotationYOffset, tiltPitch, tiltRoll);
+      if (this.decoupledFrameUpperBaseQuaternion) {
+        this.customFrameUpper.rotationQuaternion = this.decoupledFrameUpperBaseQuaternion.multiply(extraRotUpper);
+      } else {
+        this.customFrameUpper.rotationQuaternion = null;
+        this.customFrameUpper.rotation.set(
+          this.decoupledFrameUpperBaseRotation.x + tiltPitch,
+          this.decoupledFrameUpperBaseRotation.y + this.customRotationYOffset + tiltRoll,
+          this.decoupledFrameUpperBaseRotation.z
+        );
+      }
     } else if (this.customModelNode) {
       // Hovering bobbing float on y-axis (adds beautiful metallic floating feeling)
       const bobbingFactor = Math.sin(this.pulseTimer * this.customBobbingSpeed) * this.customBobbingHeight; 

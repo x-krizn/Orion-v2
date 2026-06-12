@@ -13,6 +13,7 @@ import {
   Sliders,
   Layers,
   Circle,
+  Check,
   HelpCircle,
   Sparkles,
   RefreshCw,
@@ -35,6 +36,7 @@ import {
   Target,
 } from "lucide-react";
 import { GameManager } from "./game/game/GameManager";
+import { InputManager } from "./game/input/InputSystem";
 import { PerformanceStats, ModelAssetInfo } from "./game/types";
 import { BootSequence } from "./components/BootSequence";
 // @ts-ignore
@@ -129,7 +131,7 @@ export default function App() {
   const [fov, setFov] = useState<number>(0.35);
   const [cameraDist, setCameraDist] = useState<number>(36);
   const [pitch, setPitch] = useState<number>(40);
-  const [activeTab, setActiveTab] = useState<"settings" | "effects" | "help" | "loadouts">("loadouts");
+  const [activeTab, setActiveTab] = useState<"settings" | "effects" | "help" | "loadouts" | "controls">("loadouts");
   const [showJoystick, setShowJoystick] = useState<boolean>(true);
   const [showTelemetry, setShowTelemetry] = useState<boolean>(false);
   const [showCombatDebug, setShowCombatDebug] = useState<boolean>(false);
@@ -143,6 +145,42 @@ export default function App() {
   const [joystickSize, setJoystickSize] = useState<number>(1.0);
   const [actionsSize, setActionsSize] = useState<number>(1.0);
   const [selectedTheme, setSelectedTheme] = useState<string>("cyber");
+
+  const [showInputDebug, setShowInputDebug] = useState<boolean>(false);
+  const [settingsVersion, setSettingsVersion] = useState<number>(0);
+  const [bindingAction, setBindingAction] = useState<string | null>(null);
+
+  const triggerSettingsReload = () => {
+    const im = InputManager.getInstance();
+    const t = im.settings.touch;
+    setJoystickOffset(t.joystickOffset || { x: 0, y: 0 });
+    setActionsOffset(t.actionsOffset || { x: 0, y: 0 });
+    setJoystickSize(t.analogSize || 1.0);
+    setActionsSize(t.combatButtonScale || 1.0);
+    setSettingsVersion(prev => prev + 1);
+  };
+
+  // Load unified settings on Mount
+  useEffect(() => {
+    const im = InputManager.getInstance();
+    im.loadSettings();
+    triggerSettingsReload();
+  }, []);
+
+  useEffect(() => {
+    if (!bindingAction) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault();
+      const key = e.key.toLowerCase();
+      const im = InputManager.getInstance();
+      im.settings.pc.keybinds[bindingAction] = key;
+      im.saveSettings();
+      setBindingAction(null);
+      triggerSettingsReload();
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [bindingAction]);
 
   // Dynamic loaded game database states
   const [weapons, setWeapons] = useState<any[]>([]);
@@ -162,6 +200,12 @@ export default function App() {
   const joystickKnobRef = useRef<HTMLDivElement | null>(null);
   const joystickPointerIdRef = useRef<number | null>(null);
   const [isDraggingJoystick, setIsDraggingJoystick] = useState(false);
+
+  // New on-screen right-stick aiming controls mimicking physical gamepads
+  const aimBoundRef = useRef<HTMLDivElement | null>(null);
+  const aimKnobRef = useRef<HTMLDivElement | null>(null);
+  const aimPointerIdRef = useRef<number | null>(null);
+  const [isDraggingAim, setIsDraggingAim] = useState(false);
 
   useEffect(() => {
     if (!canvasRef.current || gameState === "menu" || gameState === "options") {
@@ -608,6 +652,387 @@ export default function App() {
   // ----------------------------------------------------
   // Draggable HUD & Layout drag logic
   // ----------------------------------------------------
+  interface HUDComponent {
+    id: string;
+    name: string;
+    anchorX: "left" | "right";
+    anchorY: "top" | "bottom";
+    x: number; // offset in pixels
+    y: number; // offset in pixels
+    size: number;
+    visible: boolean;
+    width: number;
+    height: number;
+  }
+
+  const DEFAULT_HUD_LAYOUT: HUDComponent[] = [
+    { id: "driveStick", name: "Drive Stick", anchorX: "left", anchorY: "bottom", x: 24, y: 24, size: 1.0, visible: true, width: 100, height: 110 },
+    { id: "leftShoulder", name: "L1 / L2 Triggers", anchorX: "left", anchorY: "bottom", x: 125, y: 144, size: 1.0, visible: true, width: 110, height: 60 },
+    { id: "systemPanel", name: "System Config", anchorX: "left", anchorY: "bottom", x: 135, y: 24, size: 1.0, visible: true, width: 70, height: 100 },
+    { id: "dpad", name: "D-Pad Module", anchorX: "left", anchorY: "bottom", x: 220, y: 24, size: 1.0, visible: true, width: 90, height: 110 },
+    
+    { id: "aimStick", name: "Aim & Fire Stick", anchorX: "right", anchorY: "bottom", x: 24, y: 24, size: 1.0, visible: true, width: 100, height: 110 },
+    { id: "rightShoulder", name: "R1 / R2 Triggers", anchorX: "right", anchorY: "bottom", x: 125, y: 144, size: 1.0, visible: true, width: 110, height: 60 },
+    { id: "faceButtons", name: "Face Module (A/B/X/Y)", anchorX: "right", anchorY: "bottom", x: 220, y: 24, size: 1.0, visible: true, width: 90, height: 110 },
+  ];
+
+  const [hudComponents, setHudComponents] = useState<HUDComponent[]>(() => {
+    try {
+      const stored = localStorage.getItem("orion_hud_layout_v2");
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch (_) {}
+    return DEFAULT_HUD_LAYOUT;
+  });
+
+  const [autoSnap, setAutoSnap] = useState<boolean>(true);
+  const [gridSize, setGridSize] = useState<number>(20);
+  const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
+
+  const [activeHUDDrag, setActiveHUDDrag] = useState<string | null>(null);
+  const hudDragStartRef = useRef({ x: 0, y: 0 });
+  const hudDragInitialOffsetRef = useRef({ x: 0, y: 0, anchorX: "left" as "left" | "right", anchorY: "top" as "top" | "bottom" });
+
+  const saveHUDLayout = (layout: HUDComponent[]) => {
+    setHudComponents(layout);
+    try {
+      localStorage.setItem("orion_hud_layout_v2", JSON.stringify(layout));
+    } catch (_) {}
+  };
+
+  const resetHUDLayout = () => {
+    saveHUDLayout(DEFAULT_HUD_LAYOUT);
+    setSelectedComponentId(null);
+  };
+
+  const updateComponentSize = (id: string, size: number) => {
+    const adjusted = hudComponents.map(c => {
+      if (c.id === id) {
+        return { ...c, size };
+      }
+      return c;
+    });
+    saveHUDLayout(adjusted);
+  };
+
+  const handleHUDDragStart = (id: string, e: React.MouseEvent | React.TouchEvent) => {
+    if (!layoutUnlocked) return;
+    e.stopPropagation();
+    setActiveHUDDrag(id);
+    setSelectedComponentId(id);
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    
+    hudDragStartRef.current = { x: clientX, y: clientY };
+    const comp = hudComponents.find(c => c.id === id);
+    if (comp) {
+      hudDragInitialOffsetRef.current = { 
+        x: comp.x, 
+        y: comp.y, 
+        anchorX: comp.anchorX, 
+        anchorY: comp.anchorY 
+      };
+    }
+  };
+
+  const handleHUDDragMove = (e: React.MouseEvent | React.TouchEvent) => {
+    if (!activeHUDDrag) return;
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    
+    const dx = clientX - hudDragStartRef.current.x;
+    const dy = clientY - hudDragStartRef.current.y;
+    
+    const parentWidth = window.innerWidth;
+    const parentHeight = window.innerHeight;
+    
+    const comp = hudComponents.find(c => c.id === activeHUDDrag);
+    if (!comp) return;
+    
+    let startAbsX = 0;
+    let startAbsY = 0;
+    
+    const scaledWidth = comp.width * comp.size;
+    const scaledHeight = comp.height * comp.size;
+    
+    if (hudDragInitialOffsetRef.current.anchorX === "left") {
+      startAbsX = hudDragInitialOffsetRef.current.x;
+    } else {
+      startAbsX = parentWidth - hudDragInitialOffsetRef.current.x - scaledWidth;
+    }
+    
+    if (hudDragInitialOffsetRef.current.anchorY === "top") {
+      startAbsY = hudDragInitialOffsetRef.current.y;
+    } else {
+      startAbsY = parentHeight - hudDragInitialOffsetRef.current.y - scaledHeight;
+    }
+    
+    let currentAbsX = startAbsX + dx;
+    let currentAbsY = startAbsY + dy;
+    
+    currentAbsX = Math.max(0, Math.min(parentWidth - scaledWidth, currentAbsX));
+    currentAbsY = Math.max(0, Math.min(parentHeight - scaledHeight, currentAbsY));
+    
+    const isLeft = (currentAbsX + scaledWidth / 2) < (parentWidth / 2);
+    const isTop = (currentAbsY + scaledHeight / 2) < (parentHeight / 2);
+    
+    const nextAnchorX = isLeft ? "left" : "right";
+    const nextAnchorY = isTop ? "top" : "bottom";
+    
+    let nextX = 0;
+    let nextY = 0;
+    
+    if (nextAnchorX === "left") {
+      nextX = currentAbsX;
+    } else {
+      nextX = parentWidth - currentAbsX - scaledWidth;
+    }
+    
+    if (nextAnchorY === "top") {
+      nextY = currentAbsY;
+    } else {
+      nextY = parentHeight - currentAbsY - scaledHeight;
+    }
+    
+    setHudComponents(prev => prev.map(c => {
+      if (c.id === activeHUDDrag) {
+        return {
+          ...c,
+          anchorX: nextAnchorX,
+          anchorY: nextAnchorY,
+          x: nextX,
+          y: nextY
+        };
+      }
+      return c;
+    }));
+  };
+
+  const handleHUDDragEnd = () => {
+    if (!activeHUDDrag) return;
+    
+    let finalLayout = [...hudComponents];
+    if (autoSnap) {
+      finalLayout = finalLayout.map(c => {
+        if (c.id === activeHUDDrag) {
+          const snappedX = Math.round(c.x / gridSize) * gridSize;
+          const snappedY = Math.round(c.y / gridSize) * gridSize;
+          return {
+            ...c,
+            x: snappedX,
+            y: snappedY
+          };
+        }
+        return c;
+      });
+    }
+    
+    saveHUDLayout(finalLayout);
+    setActiveHUDDrag(null);
+  };
+
+  const renderComponentContent = (id: string) => {
+    switch (id) {
+      case "driveStick":
+        return (
+          <div className="flex flex-col items-center">
+            <span className="text-[6.5px] text-zinc-500 font-bold mb-1 uppercase tracking-widest leading-none">DRIVE STICK</span>
+            <div
+              ref={joystickBoundRef}
+              onPointerDown={handleJoystickPointerDown}
+              onPointerMove={handleJoystickPointerMove}
+              onPointerUp={handleJoystickPointerUpOrCancel}
+              onPointerCancel={handleJoystickPointerUpOrCancel}
+              className="relative w-18 h-18 rounded-full bg-zinc-950/20 border border-zinc-800/40 flex items-center justify-center shadow-inner touch-none cursor-pointer"
+            >
+              <div className="absolute inset-1.5 rounded-full border border-zinc-800/10 pointer-events-none" />
+              <div className="absolute top-1/2 left-1 right-1 h-[1px] bg-zinc-800/10 pointer-events-none" />
+              <div className="absolute left-1/2 top-1 bottom-1 w-[1px] bg-zinc-800/10 pointer-events-none" />
+              
+              <div
+                ref={joystickKnobRef}
+                className="w-8 h-8 rounded-full bg-gradient-to-tr from-zinc-850 to-zinc-700 border border-zinc-650 shadow-[0_4px_10px_rgba(0,0,0,0.4)] flex items-center justify-center pointer-events-none transition-transform duration-75"
+                style={{ transform: "translate(0px, 0px)" }}
+              >
+                <div className="w-3 h-3 rounded-full bg-zinc-950/30 border border-zinc-805/50" />
+              </div>
+            </div>
+          </div>
+        );
+      case "aimStick":
+        return (
+          <div className="flex flex-col items-center">
+            <span className="text-[6.5px] text-zinc-500 font-bold mb-1 uppercase tracking-widest leading-none">AIM & FIRE</span>
+            <div
+              ref={aimBoundRef}
+              onPointerDown={handleAimPointerDown}
+              onPointerMove={handleAimPointerMove}
+              onPointerUp={handleAimPointerUpOrCancel}
+              onPointerCancel={handleAimPointerUpOrCancel}
+              className="relative w-18 h-18 rounded-full bg-zinc-950/20 border border-zinc-800/40 flex items-center justify-center shadow-inner touch-none cursor-pointer"
+            >
+              <div className="absolute inset-1.5 rounded-full border border-zinc-800/10 pointer-events-none" />
+              <div className="absolute top-1/2 left-1 right-1 h-[1px] bg-zinc-800/10 pointer-events-none" />
+              <div className="absolute left-1/2 top-1 bottom-1 w-[1px] bg-zinc-800/10 pointer-events-none" />
+              
+              <div
+                ref={aimKnobRef}
+                className="w-8 h-8 rounded-full bg-gradient-to-tr from-zinc-850 to-zinc-700 border border-zinc-650 shadow-[0_4px_10px_rgba(0,0,0,0.4)] flex items-center justify-center pointer-events-none transition-transform duration-75"
+                style={{ transform: "translate(0px, 0px)" }}
+              >
+                <div className="w-3 h-3 rounded-full bg-zinc-950/30 border border-zinc-805/50" />
+              </div>
+            </div>
+          </div>
+        );
+      case "leftShoulder":
+        return (
+          <div className="flex flex-col items-center justify-center w-full h-full">
+            <span className="text-[5.5px] text-zinc-500 font-bold mb-1 uppercase tracking-wider">LEFT TRIGGERS</span>
+            <div className="flex space-x-1.5">
+              <button
+                {...bindInputButton(() => gameManagerRef.current?.triggerL2_OffSecondary())}
+                className="flex flex-col items-center justify-center h-8 w-11 bg-black/30 hover:bg-cyan-500/10 border border-cyan-500/30 text-cyan-350 rounded hover:text-white transition-all cursor-pointer shadow active:scale-95 leading-none"
+                title="Vortex Rail Cannon (L2)"
+              >
+                <span className="text-[7px] font-black text-rose-100">L2 RAIL</span>
+              </button>
+              <button
+                {...bindInputButton(() => gameManagerRef.current?.triggerL1_OffPrimary())}
+                className="flex flex-col items-center justify-center h-8 w-11 bg-black/30 hover:bg-slate-500/10 border border-zinc-700 text-[#d1d1d6] rounded hover:text-white transition-all cursor-pointer shadow active:scale-95 leading-none"
+                title="Shield Parry Defend (L1)"
+              >
+                <span className="text-[7px] font-black text-slate-350">L1 SHLD</span>
+              </button>
+            </div>
+          </div>
+        );
+      case "rightShoulder":
+        return (
+          <div className="flex flex-col items-center justify-center w-full h-full">
+            <span className="text-[5.5px] text-zinc-500 font-bold mb-1 uppercase tracking-wider text-right">RIGHT TRIGGERS</span>
+            <div className="flex space-x-1.5">
+              <button
+                {...bindInputButton(() => gameManagerRef.current?.triggerR1_Primary())}
+                className="flex flex-col items-center justify-center h-8 w-11 bg-black/30 hover:bg-orange-500/10 border border-orange-550/30 text-orange-255 rounded hover:text-white transition-all cursor-pointer shadow active:scale-95 leading-none"
+                title="Primary Laser Slash (R1)"
+              >
+                <span className="text-[7px] font-black text-orange-455">R1 PULSE</span>
+              </button>
+              <button
+                {...bindInputButton(() => gameManagerRef.current?.triggerR2_Secondary())}
+                className="flex flex-col items-center justify-center h-8 w-11 bg-black/30 hover:bg-rose-500/10 border border-rose-550/30 text-rose-350 rounded hover:text-white transition-all cursor-pointer shadow active:scale-95 leading-none"
+                title="Secondary Heavy Mortar (R2)"
+              >
+                <span className="text-[7px] font-black text-rose-455">R2 MRTR</span>
+              </button>
+            </div>
+          </div>
+        );
+      case "systemPanel":
+        return (
+          <div className="flex flex-col items-center justify-center">
+            <span className="text-[6px] text-zinc-500 font-bold mb-1 uppercase tracking-widest leading-none">SYSTEM</span>
+            <div className="flex flex-col space-y-1.5 items-center bg-black/20 border border-zinc-900/40 p-1 rounded-lg shadow-inner w-12">
+              <button
+                onClick={() => setShowTelemetry(!showTelemetry)}
+                className={`w-9 h-3.5 rounded-full border shadow transition-all cursor-pointer active:scale-90 flex items-center justify-center ${
+                  showTelemetry
+                    ? "bg-cyan-500/40 border-cyan-400 text-cyan-400 font-bold"
+                    : "bg-zinc-800 border-zinc-705 text-zinc-400"
+                }`}
+                title="Toggle Telemetry Diagnostics"
+              >
+                <span className="text-[5px] font-black uppercase tracking-tighter">SEL</span>
+              </button>
+              <button
+                {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
+                className="w-9 h-3.5 rounded-full bg-red-950/25 hover:bg-red-900/20 border border-red-500/40 text-red-400 shadow active:scale-90 flex items-center justify-center transition-all cursor-pointer"
+                title="Weapon/Matrix Stance Swap"
+              >
+                <span className="text-[5px] font-black uppercase tracking-tighter">START</span>
+              </button>
+            </div>
+          </div>
+        );
+      case "dpad":
+        return (
+          <div className="flex flex-col items-center">
+            <span className="text-[6px] text-zinc-500 font-bold mb-1 uppercase tracking-widest">D-PAD</span>
+            <div className="relative w-15 h-15 bg-zinc-950/20 border border-zinc-800/40 rounded-full select-none shadow-inner flex items-center justify-center scale-90">
+              <button
+                {...bindInputButton(() => setShowTelemetry(!showTelemetry))}
+                className="absolute top-0.5 w-4.5 h-3.5 rounded bg-black/40 border border-zinc-805/30 hover:bg-zinc-800 text-zinc-350 text-[6px] font-bold flex items-center justify-center cursor-pointer shadow-sm"
+                title="D-Pad Up"
+              >
+                ▲
+              </button>
+              <button
+                {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
+                className="absolute left-0.5 w-3.5 h-4.5 rounded bg-black/40 border border-zinc-805/30 hover:bg-zinc-800 text-zinc-350 text-[6px] font-bold flex items-center justify-center cursor-pointer shadow-sm"
+                title="D-Pad Left"
+              >
+                ◀
+              </button>
+              <button
+                {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
+                className="absolute right-0.5 w-3.5 h-4.5 rounded bg-black/40 border border-zinc-805/30 hover:bg-zinc-800 text-zinc-350 text-[6px] font-bold flex items-center justify-center cursor-pointer shadow-sm"
+                title="D-Pad Right"
+              >
+                ▶
+              </button>
+              <button
+                {...bindInputButton(() => { setShowCombatDebug(!showCombatDebug); })}
+                className="absolute bottom-0.5 w-4.5 h-3.5 rounded bg-black/40 border border-zinc-805/30 hover:bg-zinc-800 text-zinc-350 text-[6px] font-bold flex items-center justify-center cursor-pointer shadow-sm"
+                title="D-Pad Down"
+              >
+                ▼
+              </button>
+            </div>
+          </div>
+        );
+      case "faceButtons":
+        return (
+          <div className="flex flex-col items-center">
+            <span className="text-[6px] text-zinc-500 font-bold mb-1 uppercase tracking-widest leading-none">FACE MODULE</span>
+            <div className="relative w-15 h-15 bg-zinc-950/25 border border-zinc-800/40 rounded-full select-none shadow-inner flex items-center justify-center scale-90">
+              <button
+                {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
+                className="absolute top-0.5 w-5 h-5 rounded-full bg-black/40 hover:bg-yellow-500/20 border border-yellow-500/40 hover:border-yellow-400 text-yellow-450 font-bold text-[7px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
+                title="Stance Swap (Y)"
+              >
+                Y
+              </button>
+              <button
+                {...bindInputButton(() => gameManagerRef.current?.triggerActionCancel())}
+                className="absolute left-0.5 w-5 h-5 rounded-full bg-black/40 hover:bg-blue-500/20 border border-blue-500/40 hover:border-blue-400 text-blue-405 font-bold text-[7px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
+                title="Clear / Interrupt Locks (X)"
+              >
+                X
+              </button>
+              <button
+                {...bindInputButton(() => gameManagerRef.current?.triggerButtonDash())}
+                className="absolute right-0.5 w-5 h-5 rounded-full bg-gradient-to-tr from-red-650 to-rose-500 border border-red-500/50 text-white font-extrabold text-[7px] flex items-center justify-center active:scale-95 transition-all cursor-pointer shadow"
+                title="Thruster Dash Booster (B)"
+              >
+                B
+              </button>
+              <button
+                {...bindInputButton(() => gameManagerRef.current?.triggerContextAction())}
+                className="absolute bottom-0.5 w-5 h-5 rounded-full bg-black/40 hover:bg-emerald-500/20 border border-emerald-500/40 hover:border-emerald-400 text-emerald-450 font-bold text-[7px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
+                title="Shockwave Context Trigger (A)"
+              >
+                A
+              </button>
+            </div>
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
   const [activeDragTarget, setActiveDragTarget] = useState<"joystick" | "actions" | null>(null);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const initialOffsetRef = useRef({ x: 0, y: 0 });
@@ -624,6 +1049,10 @@ export default function App() {
   };
 
   const handleDragMoveRelative = (e: React.MouseEvent | React.TouchEvent) => {
+    if (activeHUDDrag) {
+      handleHUDDragMove(e);
+      return;
+    }
     if (!activeDragTarget) return;
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
@@ -645,6 +1074,16 @@ export default function App() {
   };
 
   const handleDragEndRelative = () => {
+    if (activeHUDDrag) {
+      handleHUDDragEnd();
+      return;
+    }
+    if (activeDragTarget) {
+      const im = InputManager.getInstance();
+      im.settings.touch.joystickOffset = joystickOffset;
+      im.settings.touch.actionsOffset = actionsOffset;
+      im.saveSettings();
+    }
     setActiveDragTarget(null);
   };
 
@@ -656,7 +1095,9 @@ export default function App() {
     e.preventDefault();
     e.stopPropagation();
     const target = e.currentTarget as HTMLDivElement;
-    target.setPointerCapture(e.pointerId);
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch (_) {}
     joystickPointerIdRef.current = e.pointerId;
     setIsDraggingJoystick(true);
     updateJoystickPos(e);
@@ -708,8 +1149,73 @@ export default function App() {
 
     // Transmute into normal ranges -1 to 1 for direction update
     const normX = finalDx / maxRadius;
+    // Negate Y so dragging UP (negative delta) moves the player forward (positive Z movement direction)
     const normY = finalDy / maxRadius;
-    gameManagerRef.current?.input.handleJoystickUpdate(normX, normY, true);
+    gameManagerRef.current?.input.handleJoystickUpdate(normX, -normY, true);
+  };
+
+  const handleAimPointerDown = (e: React.PointerEvent) => {
+    if (layoutUnlocked) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const target = e.currentTarget as HTMLDivElement;
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch (_) {}
+    aimPointerIdRef.current = e.pointerId;
+    setIsDraggingAim(true);
+    updateAimPos(e);
+  };
+
+  const handleAimPointerMove = (e: React.PointerEvent) => {
+    if (!isDraggingAim || e.pointerId !== aimPointerIdRef.current) return;
+    updateAimPos(e);
+  };
+
+  const handleAimPointerUpOrCancel = (e: React.PointerEvent) => {
+    if (e.pointerId !== aimPointerIdRef.current) return;
+    releaseAim();
+  };
+
+  const releaseAim = () => {
+    setIsDraggingAim(false);
+    aimPointerIdRef.current = null;
+    if (aimKnobRef.current) {
+      aimKnobRef.current.style.transform = `translate(0px, 0px)`;
+    }
+    gameManagerRef.current?.input.handleAimJoystickUpdate(0, 0, false);
+  };
+
+  const updateAimPos = (e: React.PointerEvent) => {
+    if (!aimBoundRef.current || !aimKnobRef.current) return;
+
+    const boundRect = aimBoundRef.current.getBoundingClientRect();
+    const boundCenterX = boundRect.left + boundRect.width / 2;
+    const boundCenterY = boundRect.top + boundRect.height / 2;
+
+    const clientX = e.clientX;
+    const clientY = e.clientY;
+
+    const dx = clientX - boundCenterX;
+    const dy = clientY - boundCenterY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    const maxRadius = 45; // clamp range boundary
+    let finalDx = dx;
+    let finalDy = dy;
+
+    if (dist > maxRadius) {
+      finalDx = (dx / dist) * maxRadius;
+      finalDy = (dy / dist) * maxRadius;
+    }
+
+    aimKnobRef.current.style.transform = `translate(${finalDx}px, ${finalDy}px)`;
+
+    // Transmute into normal ranges -1 to 1 for direction update
+    const normX = finalDx / maxRadius;
+    // Negate Y so dragging UP (negative delta) aims the weapon forward (positive Z camera/target space)
+    const normY = finalDy / maxRadius;
+    gameManagerRef.current?.input.handleAimJoystickUpdate(normX, -normY, true);
   };
 
   // Helper to bind gameplay action buttons to work flawlessly with multi-touch and mouse clicks simultaneously
@@ -821,6 +1327,17 @@ export default function App() {
             <span>COMBAT DBG: {showCombatDebug ? "ON" : "OFF"}</span>
           </button>
 
+          {/* Input Debug Toggle */}
+          <button
+            id="inputDebugToggleButton"
+            onClick={() => setShowInputDebug(!showInputDebug)}
+            className="px-1.5 py-0.5 bg-indigo-500/11 hover:bg-indigo-500/25 border border-indigo-500/35 text-[#c7d2fe] hover:text-white text-[8px] rounded font-mono uppercase transition-all flex items-center gap-1 cursor-pointer ml-1"
+            title="Toggle Orion Central Input Diagnostics Panel"
+          >
+            <Sliders className="w-2.5 h-2.5 animate-pulse text-indigo-400" />
+            <span>INPUT DBG: {showInputDebug ? "ON" : "OFF"}</span>
+          </button>
+
           {gameState === "training" && (
             <button
               onClick={handleExitToMenu}
@@ -879,267 +1396,170 @@ export default function App() {
             </div>
           </div>
         </div>
-      </header>      {/* ---------------------------------------------------- */}
+      </header>
+      {/* ---------------------------------------------------- */}
       {/* COMBAT FLIGHT DECKS (Two Corner-Anchored Flight Suites) */}
       {/* ---------------------------------------------------- */}
       {showJoystick && (
         <>
-          {/* LEFT WING DECK (Walk/Aim Analog Stick, X Y A Face Buttons & System Controls) */}
-          <div 
-            onPointerDown={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
-            onTouchStart={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
-            onTouchMove={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
-            onTouchEnd={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
-            className={`absolute z-4 select-none pointer-events-auto rounded-2xl p-3 sm:p-4 border transition-all ${
-              layoutUnlocked 
-                ? "border-red-500 bg-red-950/30 shadow-[0_0_20px_rgba(239,68,68,0.3)] ring-2 ring-red-500/40" 
-                : "border-zinc-850 bg-[#07070a]/94 backdrop-blur-md shadow-[0_0_25px_rgba(0,0,0,0.92)]"
-            }`}
-            style={{
-              left: '1.5rem',
-              bottom: '1.5rem',
-              transform: `translate(${joystickOffset.x}px, -${joystickOffset.y}px) scale(${joystickSize})`,
-              transformOrigin: 'bottom left',
-              touchAction: 'none',
-              width: '320px'
-            }}
-          >
-            {layoutUnlocked && (
-              <div 
-                onMouseDown={(e) => handleDragStart("joystick", e)}
-                onTouchStart={(e) => handleDragStart("joystick", e)}
-                className="absolute -top-6 left-0 right-0 h-5 bg-red-500 text-black text-[9px] font-mono font-black flex items-center justify-between px-2 cursor-move rounded-t-md uppercase select-none animate-pulse"
-              >
-                <div className="flex items-center gap-1">
-                  <Move className="w-2.5 h-2.5" />
-                  <span>Drag Left Deck</span>
-                </div>
-                <div className="flex gap-1.5 pointer-events-auto" onMouseDown={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()}>
+          {/* Cybermatic Visual Grid Overlay active during layout edit sessions */}
+          {layoutUnlocked && (
+            <div 
+              className="absolute inset-0 z-3 pointer-events-none select-none transition-opacity duration-300"
+              style={{
+                backgroundImage: `
+                  linear-gradient(to right, rgba(239, 68, 68, 0.08) 1px, transparent 1px),
+                  linear-gradient(to bottom, rgba(239, 68, 68, 0.08) 1px, transparent 1px)
+                `,
+                backgroundSize: `${gridSize}px ${gridSize}px`
+              }}
+            />
+          )}
+
+          {/* Quick HUD Customization / Layout Editor Control Dashboard */}
+          {layoutUnlocked && (
+            <div className="absolute top-20 left-1/2 -translate-x-1/2 z-10 bg-slate-950/90 border border-rose-500/50 rounded-xl p-3 px-5 shadow-2xl flex flex-col items-center gap-2 text-white font-mono pointer-events-auto max-w-sm sm:max-w-md w-full animate-fade-in">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
+                <span className="text-xs font-black text-rose-500 tracking-wider uppercase">HUD Layout Grid Rig</span>
+              </div>
+              <p className="text-[10px] text-zinc-400 text-center leading-normal">
+                Drag any component's red handle to reposition. Switch components left to right across the screen center line!
+              </p>
+              
+              <div className="flex items-center justify-between gap-4 w-full border-t border-zinc-900 pt-2 mt-1">
+                <label className="flex items-center gap-1.5 cursor-pointer text-[10px] select-none text-zinc-300 hover:text-white transition-colors">
+                  <input 
+                    type="checkbox" 
+                    checked={autoSnap} 
+                    onChange={(e) => setAutoSnap(e.target.checked)} 
+                    className="accent-red-500 w-3.5 h-3.5 cursor-pointer rounded bg-zinc-900 border-zinc-700" 
+                  />
+                  <span>AUTO-SNAP (GRID)</span>
+                </label>
+                <div className="flex gap-1.5">
                   <button 
-                    onClick={() => setJoystickSize(Math.max(0.6, joystickSize - 0.1))} 
-                    className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
+                    onClick={() => { setGridSize(prev => prev === 10 ? 20 : prev === 20 ? 40 : 10); }}
+                    className="bg-zinc-900 hover:bg-zinc-800 text-white rounded px-2 py-1 text-[9px] border border-zinc-800 cursor-pointer font-bold transition-all"
                   >
-                    -
+                    GRID: {gridSize}px
                   </button>
-                  <span className="text-[8px] font-bold">{(joystickSize * 100).toFixed(0)}%</span>
                   <button 
-                    onClick={() => setJoystickSize(Math.min(1.8, joystickSize + 0.1))} 
-                    className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
+                    onClick={resetHUDLayout}
+                    className="bg-red-950/40 hover:bg-red-900/50 border border-red-505/30 text-rose-300 rounded px-2 py-1 text-[9px] cursor-pointer font-bold transition-all"
                   >
-                    +
+                    RESET ALL
                   </button>
                 </div>
               </div>
-            )}
 
-            {/* Left Deck layout: Row structure holding Analog Stick, select/start, and XY/A face buttons */}
-            <div className="flex items-center justify-between mt-1">
-              
-              {/* 1. Touch Analog Control Stick */}
-              <div className="flex flex-col items-center">
-                <span className="text-[7px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest text-[#8e8e93]">ANALOG STICK</span>
-                <div
-                  ref={joystickBoundRef}
-                  onPointerDown={handleJoystickPointerDown}
-                  onPointerMove={handleJoystickPointerMove}
-                  onPointerUp={handleJoystickPointerUpOrCancel}
-                  onPointerCancel={handleJoystickPointerUpOrCancel}
-                  className="relative w-20 h-20 rounded-full bg-zinc-950/60 border border-zinc-800/80 flex items-center justify-center shadow-inner touch-none cursor-pointer"
-                >
-                  {/* Subtle crosshairs / details */}
-                  <div className="absolute inset-2 rounded-full border border-zinc-800/20 pointer-events-none" />
-                  <div className="absolute top-1/2 left-1 right-1 h-[1px] bg-zinc-800/20 pointer-events-none" />
-                  <div className="absolute left-1/2 top-1 bottom-1 w-[1px] bg-zinc-800/20 pointer-events-none" />
-                  
-                  <div
-                    ref={joystickKnobRef}
-                    className="w-9 h-9 rounded-full bg-gradient-to-tr from-zinc-800 to-zinc-650 border border-zinc-600 shadow-[0_4px_10px_rgba(0,0,0,0.6)] flex items-center justify-center pointer-events-none transition-transform duration-75"
-                    style={{ transform: "translate(0px, 0px)" }}
-                  >
-                    <div className="w-3.5 h-3.5 rounded-full bg-zinc-950/40 border border-zinc-800" />
+              {selectedComponentId && (
+                <div className="flex items-center justify-between w-full border-t border-zinc-900 pt-2 mt-1 text-[10px] text-zinc-400">
+                  <span className="truncate">SELECTED: <strong className="text-orange-400 font-extrabold uppercase">{hudComponents.find(c => c.id === selectedComponentId)?.name}</strong></span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span>SIZE:</span>
+                    <input 
+                      type="range" 
+                      min="0.5" 
+                      max="1.5" 
+                      step="0.05" 
+                      value={hudComponents.find(c => c.id === selectedComponentId)?.size ?? 1.0}
+                      onChange={(e) => updateComponentSize(selectedComponentId, parseFloat(e.target.value))}
+                      className="accent-orange-550 w-16 h-1 cursor-pointer rounded-lg bg-zinc-805"
+                    />
+                    <span className="text-[9px] font-black text-orange-400 w-8 text-right shrink-0">{((hudComponents.find(c => c.id === selectedComponentId)?.size ?? 1.0) * 100).toFixed(0)}%</span>
                   </div>
                 </div>
-              </div>
-
-              {/* 2. Middle Row: Start & Select (Sel) rubber pill buttons */}
-              <div className="flex flex-col items-center justify-center px-1">
-                <span className="text-[7px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest text-[#8e8e93]">SYSTEM</span>
-                <div className="flex flex-col space-y-2 items-center bg-[#0d0d12] border border-zinc-900/60 p-2.5 rounded-lg shadow-inner">
-                  {/* SEL Button */}
-                  <button
-                    onClick={() => setShowTelemetry(!showTelemetry)}
-                    className={`w-9 h-4 rounded-full border shadow transition-all cursor-pointer active:scale-90 flex items-center justify-center ${
-                      showTelemetry
-                        ? "bg-cyan-500/20 border-cyan-400 text-cyan-400 font-bold"
-                        : "bg-zinc-800 border-zinc-700 text-zinc-400"
-                    }`}
-                    title="Toggle Telemetry Diagnostics"
-                  >
-                    <span className="text-[6px] font-black uppercase tracking-tighter">SEL</span>
-                  </button>
-                  {/* START Button */}
-                  <button
-                    {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
-                    className="w-9 h-4 rounded-full bg-red-950/40 hover:bg-red-900/30 border border-red-500/50 text-red-400 shadow active:scale-90 flex items-center justify-center transition-all cursor-pointer"
-                    title="Weapon/Matrix Stance Swap"
-                  >
-                    <span className="text-[6px] font-black uppercase tracking-tighter text-rose-450">START</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* 3. Face Action Buttons (X Y A Cluster Arrangement) */}
-              <div className="flex flex-col items-center">
-                <span className="text-[7px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest text-[#8e8e93]">ACTION</span>
-                <div className="relative w-20 h-20 bg-zinc-950/60 border border-zinc-800/80 rounded-full select-none shadow-inner flex items-center justify-center">
-                  
-                  {/* Y Button: Top center */}
-                  <button
-                    {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
-                    className="absolute top-1 w-6 h-6 rounded-full bg-[#181822] hover:bg-yellow-500/20 border border-yellow-500/40 hover:border-yellow-400 text-yellow-550 font-bold text-[9px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
-                    title="Stance Swap (Y)"
-                  >
-                    Y
-                  </button>
-
-                  {/* X Button: Left side */}
-                  <button
-                    {...bindInputButton(() => gameManagerRef.current?.triggerActionCancel())}
-                    className="absolute left-1 w-6 h-6 rounded-full bg-[#181822] hover:bg-blue-500/20 border border-blue-500/40 hover:border-blue-400 text-blue-400 font-bold text-[9px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
-                    title="Clear / Interrupt Locks (X)"
-                  >
-                    X
-                  </button>
-
-                  {/* A Button: Bottom center */}
-                  <button
-                    {...bindInputButton(() => gameManagerRef.current?.triggerContextAction())}
-                    className="absolute bottom-1 w-6 h-6 rounded-full bg-[#181822] hover:bg-emerald-500/20 border border-emerald-500/40 hover:border-emerald-400 text-emerald-450 font-bold text-[9px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
-                    title="Shockwave context trigger (A)"
-                  >
-                    A
-                  </button>
-                </div>
-              </div>
-
+              )}
             </div>
-          </div>
+          )}
 
-          {/* RIGHT WING DECK (Triggers: L1, L2, R1, R2, Dash B Booster) */}
-          <div 
-            onPointerDown={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
-            onTouchStart={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
-            onTouchMove={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
-            onTouchEnd={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
-            className={`absolute z-4 select-none pointer-events-auto rounded-2xl p-3 sm:p-4 border transition-all ${
-              layoutUnlocked 
-                ? "border-red-500 bg-red-950/30 shadow-[0_0_20px_rgba(239,68,68,0.3)] ring-2 ring-red-500/40" 
-                : "border-zinc-850 bg-[#07070a]/94 backdrop-blur-md shadow-[0_0_25px_rgba(0,0,0,0.92)]"
-            }`}
-            style={{
-              right: '1.5rem',
-              bottom: '1.5rem',
-              transform: `translate(-${actionsOffset.x}px, -${actionsOffset.y}px) scale(${actionsSize})`,
-              transformOrigin: 'bottom right',
+          {/* Individual, Absolute-Positioned Floating HUD Widgets */}
+          {hudComponents.map((comp) => {
+            if (!comp.visible) return null;
+            
+            const isSelected = selectedComponentId === comp.id;
+            const isDragged = activeHUDDrag === comp.id;
+            
+            // Generate styles adjusting for anchor side (portrait & landscape fluid support)
+            const style: React.CSSProperties = {
+              position: 'absolute',
+              zIndex: isDragged ? 50 : 20,
               touchAction: 'none',
-              width: '270px'
-            }}
-          >
-            {layoutUnlocked && (
-              <div 
-                onMouseDown={(e) => handleDragStart("actions", e)}
-                onTouchStart={(e) => handleDragStart("actions", e)}
-                className="absolute -top-6 left-0 right-0 h-5 bg-red-500 text-black text-[9px] font-mono font-black flex items-center justify-between px-2 cursor-move rounded-t-md uppercase select-none animate-pulse"
-              >
-                <div className="flex items-center gap-1">
-                  <Move className="w-2.5 h-2.5" />
-                  <span>Drag Right Deck</span>
-                </div>
-                <div className="flex gap-1.5 pointer-events-auto" onMouseDown={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()}>
-                  <button 
-                    onClick={() => setActionsSize(Math.max(0.6, actionsSize - 0.1))} 
-                    className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
-                  >
-                    -
-                  </button>
-                  <span className="text-[8px] font-bold">{(actionsSize * 100).toFixed(0)}%</span>
-                  <button 
-                    onClick={() => setActionsSize(Math.min(1.8, actionsSize + 0.1))} 
-                    className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Right Deck layout: Double wings of triggers flanking a larger physical red circle B Dash button */}
-            <div className="flex flex-col items-center">
-              <span className="text-[7px] text-zinc-500 font-bold mb-2.5 uppercase tracking-widest text-[#8e8e93] leading-none">COMBAT & DRIFT TRIGGER MODULE</span>
+              transform: `scale(${comp.size})`,
+              transformOrigin: `${comp.anchorY} ${comp.anchorX}`,
+              opacity: InputManager.getInstance().settings?.touch?.opacity ?? 1.0,
+              transition: isDragged ? 'none' : 'transform 100ms ease, border-color 150ms ease'
+            };
+            
+            if (comp.anchorX === 'left') {
+              style.left = `${comp.x}px`;
+            } else {
+              style.right = `${comp.x}px`;
+            }
+            
+            if (comp.anchorY === 'top') {
+              style.top = `${comp.y}px`;
+            } else {
+              style.bottom = `${comp.y}px`;
+            }
+            
+            const borderClass = layoutUnlocked
+              ? isSelected
+                ? "border-orange-500 bg-orange-950/20 shadow-[0_0_15px_rgba(249,115,22,0.4)] ring-2 ring-orange-500/50"
+                : "border-red-500/60 bg-red-950/15 shadow-[0_0_8px_rgba(239,68,68,0.1)] hover:border-red-400/80 cursor-pointer"
+              : "border-white/5 bg-black/20 shadow-none text-white/90";
               
-              <div className="w-full flex items-center justify-between mt-1 px-1">
+            return (
+              <div
+                key={comp.id}
+                id={`hud-comp-${comp.id}`}
+                style={style}
+                className={`select-none pointer-events-auto rounded-2xl p-3 border transition-all ${borderClass}`}
+                onPointerDown={(e) => { 
+                  if (!layoutUnlocked) { 
+                    e.stopPropagation(); 
+                  } else {
+                    setSelectedComponentId(comp.id);
+                  }
+                }}
+              >
+                {/* Visual red dragging handle displayed in edit mode */}
+                {layoutUnlocked && (
+                  <div
+                    onMouseDown={(e) => handleHUDDragStart(comp.id, e)}
+                    onTouchStart={(e) => handleHUDDragStart(comp.id, e)}
+                    className="absolute -top-5 left-0 right-0 h-5 bg-red-500 hover:bg-red-400 text-black text-[8px] font-mono font-black flex items-center justify-between px-2 cursor-move rounded-t-lg uppercase select-none animate-pulse-slow"
+                  >
+                    <div className="flex items-center gap-1">
+                      <Move className="w-2.5 h-2.5 shrink-0" />
+                      <span className="truncate max-w-[80px]">{comp.name}</span>
+                    </div>
+                    <div className="flex gap-1 items-center pointer-events-auto shrink-0" onMouseDown={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => updateComponentSize(comp.id, Math.max(0.5, comp.size - 0.1))}
+                        className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
+                      >
+                        -
+                      </button>
+                      <span className="text-[7.5px] font-black leading-none">{(comp.size * 100).toFixed(0)}%</span>
+                      <button
+                        onClick={() => updateComponentSize(comp.id, Math.min(1.5, comp.size + 0.1))}
+                        className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                )}
                 
-                {/* Left side: Off-hand Shoulder Bumpers (L1/L2) */}
-                <div className="flex flex-col space-y-2">
-                  {/* L2 trigger (Rail/Vortex) */}
-                  <button
-                    {...bindInputButton(() => gameManagerRef.current?.triggerL2_OffSecondary())}
-                    className="flex flex-col items-center justify-center h-10 w-11 bg-[#1a1a24]/80 hover:bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 rounded-lg hover:text-white transition-all cursor-pointer shadow active:scale-95"
-                    title="Vortex Rail Cannon (L2)"
-                  >
-                    <span className="text-[9px] font-black text-white">L2</span>
-                    <span className="text-[5px] font-bold text-cyan-400 uppercase leading-none mt-0.5">RAIL</span>
-                  </button>
-
-                  {/* L1 trigger (Shield/Parry) */}
-                  <button
-                    {...bindInputButton(() => gameManagerRef.current?.triggerL1_OffPrimary())}
-                    className="flex flex-col items-center justify-center h-10 w-11 bg-[#1a1a24]/80 hover:bg-slate-500/10 border border-zinc-700 text-[#d1d1d6] rounded-lg hover:text-white transition-all cursor-pointer shadow active:scale-95"
-                    title="Shield Parry Defend (L1)"
-                  >
-                    <span className="text-[9px] font-black text-slate-300">L1</span>
-                    <span className="text-[5px] font-bold text-slate-400 uppercase leading-none mt-0.5">SHLD</span>
-                  </button>
+                {/* Element content container adjusted to size bounds */}
+                <div style={{ width: `${comp.width}px`, height: `${comp.height}px` }} className="flex flex-col justify-center items-center relative">
+                  {renderComponentContent(comp.id)}
                 </div>
-
-                {/* Center: Large Kinetic red B Booster button */}
-                <div className="flex flex-col items-center">
-                  <button
-                    {...bindInputButton(() => gameManagerRef.current?.triggerButtonDash())}
-                    className="w-14 h-14 rounded-full bg-gradient-to-tr from-red-650 to-rose-500 hover:from-red-500 hover:to-rose-400 border-2 border-red-400 shadow-[0_0_18px_rgba(239,68,68,0.55)] flex flex-col items-center justify-center active:scale-95 text-white cursor-pointer transition-transform duration-75 shadow-md"
-                    title="Thruster Dash drive (B)"
-                  >
-                    <span className="text-sm font-black drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] leading-none mb-0.5">B</span>
-                    <span className="text-[5.5px] font-extrabold tracking-widest opacity-95 drop-shadow-[0_1px_1px_rgba(0,0,0,0.7)] leading-none text-red-100 uppercase scale-90">BOOST</span>
-                  </button>
-                </div>
-
-                {/* Right side: Main Weapon Shoulder Bumpers (R1/R2) */}
-                <div className="flex flex-col space-y-2">
-                  {/* R2 trigger (Mortar/Wave) */}
-                  <button
-                    {...bindInputButton(() => gameManagerRef.current?.triggerR2_Secondary())}
-                    className="flex flex-col items-center justify-center h-10 w-11 bg-rose-950/20 hover:bg-rose-950/40 border border-rose-550/40 text-rose-350 rounded-lg hover:text-white transition-all cursor-pointer shadow active:scale-95"
-                    title="Secondary Heavy Mortar (R2)"
-                  >
-                    <span className="text-[9px] font-black text-rose-400">R2</span>
-                    <span className="text-[5px] font-bold text-rose-500 uppercase leading-none mt-0.5">MRTR</span>
-                  </button>
-
-                  {/* R1 trigger (Pulse/Slash) */}
-                  <button
-                    {...bindInputButton(() => gameManagerRef.current?.triggerR1_Primary())}
-                    className="flex flex-col items-center justify-center h-10 w-11 bg-orange-950/20 hover:bg-orange-950/40 border border-orange-550/40 text-orange-350 rounded-lg hover:text-white transition-all cursor-pointer shadow active:scale-95 animate-pulse-slow"
-                    title="Primary Laser Slash (R1)"
-                  >
-                    <span className="text-[9px] font-black text-orange-400">R1</span>
-                    <span className="text-[5px] font-bold text-orange-500 uppercase leading-none mt-0.5">PULSE</span>
-                  </button>
-                </div>
-
               </div>
-            </div>
-          </div>
+            );
+          })}
         </>
       )}
         {/* Centered Desktop Resource dashboard (visible on desktop screen ranges in training/play mode) */}
@@ -1282,10 +1702,10 @@ export default function App() {
             <Cpu className="w-4 h-4 text-orange-500" />
             <h2 className="text-xs font-bold tracking-wider text-white">TACTICAL DECK CONTROLS</h2>
           </div>
-          <div className="flex space-x-1">
+          <div className="flex flex-wrap gap-1">
             <button
               onClick={() => setActiveTab("settings")}
-              className={`p-1 px-2.5 rounded text-[10px] font-mono border transition-all cursor-pointer ${
+              className={`p-1 px-2 rounded text-[10px] font-mono border transition-all cursor-pointer ${
                 activeTab === "settings"
                   ? "bg-orange-500/15 border-orange-500 text-orange-400 font-bold"
                   : "border-white/5 text-white/50 hover:text-white"
@@ -1294,8 +1714,18 @@ export default function App() {
               CAMERA
             </button>
             <button
+              onClick={() => setActiveTab("controls")}
+              className={`p-1 px-2 rounded text-[10px] font-mono border transition-all cursor-pointer ${
+                activeTab === "controls"
+                  ? "bg-orange-500/15 border-orange-500 text-orange-400 font-bold"
+                  : "border-white/5 text-white/50 hover:text-white"
+              }`}
+            >
+              CONTROLS
+            </button>
+            <button
               onClick={() => setActiveTab("loadouts")}
-              className={`p-1 px-2.5 rounded text-[10px] font-mono border transition-all cursor-pointer ${
+              className={`p-1 px-2 rounded text-[10px] font-mono border transition-all cursor-pointer ${
                 activeTab === "loadouts"
                   ? "bg-orange-500/15 border-orange-500 text-orange-400 font-bold"
                   : "border-white/5 text-white/50 hover:text-white"
@@ -1305,7 +1735,7 @@ export default function App() {
             </button>
             <button
               onClick={() => setActiveTab("effects")}
-              className={`p-1 px-2.5 rounded text-[10px] font-mono border transition-all cursor-pointer ${
+              className={`p-1 px-2 rounded text-[10px] font-mono border transition-all cursor-pointer ${
                 activeTab === "effects"
                   ? "bg-orange-500/15 border-orange-500 text-orange-400 font-bold"
                   : "border-[#d1d1d6]/5 hover:text-white"
@@ -1315,7 +1745,7 @@ export default function App() {
             </button>
             <button
               onClick={() => setActiveTab("help")}
-              className={`p-1 px-2.5 rounded text-[10px] font-mono border transition-all cursor-pointer ${
+              className={`p-1 px-2 rounded text-[10px] font-mono border transition-all cursor-pointer ${
                 activeTab === "help"
                   ? "bg-orange-500/15 border-orange-500 text-orange-400 font-bold"
                   : "border-white/5 text-white/50 hover:text-white"
@@ -1974,9 +2404,442 @@ export default function App() {
                   max="70"
                   value={pitch}
                   onChange={(e) => handlePitchChange(parseInt(e.target.value))}
-                  className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                  className="w-full accent-orange-555 bg-white/10 h-1 rounded cursor-pointer"
                 />
               </div>
+
+            </div>
+          </div>
+        )}
+
+        {activeTab === "controls" && (
+          <div className="space-y-4">
+            {/* ============================================== */}
+            {/* CENTRAL UNIFIED SPECTRUM CONTROLS SETTINGS */}
+            {/* ============================================== */}
+            <div className="space-y-4 font-mono text-[11px] text-left">
+              <div className="flex items-center space-x-1.5 pb-1 border-b border-white/5">
+                <Sliders className="w-3.5 h-3.5 text-orange-500 animate-pulse" />
+                <span className="text-[10px] font-bold tracking-widest text-[#d1d1d6] uppercase">SPECTRUM INPUT CONTROLS</span>
+              </div>
+
+              {/* Active Input Device Indicator */}
+              <div className="p-2.5 rounded bg-black/50 border border-white/5 flex items-center justify-between">
+                <span className="text-[9px] text-zinc-500 uppercase font-bold tracking-wider">Active Device:</span>
+                <span className="text-emerald-400 font-black uppercase text-xs flex items-center gap-1.5 animate-pulse">
+                  <span className="w-2 h-2 rounded-full bg-emerald-405 animate-ping" />
+                  {InputManager.getInstance().getActiveDeviceName()}
+                </span>
+              </div>
+
+              {/* 1. Global Controls settings */}
+              <div className="space-y-3 p-2.5 rounded bg-black/30 border border-white/5">
+                <span className="text-[9px] font-bold text-orange-450 uppercase block tracking-wider">Global Configuration</span>
+                
+                <div>
+                  <div className="flex justify-between mb-1 text-slate-300">
+                    <span>TAP / HOLD THRESHOLD:</span>
+                    <span className="text-orange-400 font-bold">{InputManager.getInstance().settings.global.tapHoldThreshold} ms</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="150"
+                    max="500"
+                    step="10"
+                    value={InputManager.getInstance().settings.global.tapHoldThreshold}
+                    onChange={(e) => {
+                      const im = InputManager.getInstance();
+                      im.settings.global.tapHoldThreshold = parseInt(e.target.value);
+                      im.saveSettings();
+                      triggerSettingsReload();
+                    }}
+                    className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-1 text-slate-300">
+                    <span>AIM SENSITIVITY:</span>
+                    <span className="text-orange-400 font-bold">{InputManager.getInstance().settings.global.aimSensitivity.toFixed(2)}x</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.2"
+                    max="3.0"
+                    step="0.05"
+                    value={InputManager.getInstance().settings.global.aimSensitivity}
+                    onChange={(e) => {
+                      const im = InputManager.getInstance();
+                      im.settings.global.aimSensitivity = parseFloat(e.target.value);
+                      im.saveSettings();
+                      triggerSettingsReload();
+                    }}
+                    className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <label className="flex items-center space-x-2 cursor-pointer text-slate-300 select-none">
+                    <input
+                      type="checkbox"
+                      checked={InputManager.getInstance().settings.global.invertAimX}
+                      onChange={(e) => {
+                        const im = InputManager.getInstance();
+                        im.settings.global.invertAimX = e.target.checked;
+                        im.saveSettings();
+                        triggerSettingsReload();
+                      }}
+                      className="accent-orange-500 cursor-pointer w-3.5 h-3.5"
+                    />
+                    <span>INVERT AIM X</span>
+                  </label>
+
+                  <label className="flex items-center space-x-2 cursor-pointer text-slate-300 select-none">
+                    <input
+                      type="checkbox"
+                      checked={InputManager.getInstance().settings.global.invertAimY}
+                      onChange={(e) => {
+                        const im = InputManager.getInstance();
+                        im.settings.global.invertAimY = e.target.checked;
+                        im.saveSettings();
+                        triggerSettingsReload();
+                      }}
+                      className="accent-orange-500 cursor-pointer w-3.5 h-3.5"
+                    />
+                    <span>INVERT AIM Y</span>
+                  </label>
+
+                  <label className="flex items-center space-x-2 cursor-pointer text-slate-300 select-none col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={InputManager.getInstance().settings.global.lockOnEnabled}
+                      onChange={(e) => {
+                        const im = InputManager.getInstance();
+                        im.settings.global.lockOnEnabled = e.target.checked;
+                        im.saveSettings();
+                        triggerSettingsReload();
+                      }}
+                      className="accent-orange-555 cursor-pointer w-3.5 h-3.5"
+                    />
+                    <span>LOCK-ON SYSTEM ENABLED</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* 2. PC / Keybindings and Mouse adjustments */}
+              <div className="space-y-3 p-2.5 rounded bg-black/30 border border-white/5">
+                <span className="text-[9px] font-bold text-orange-450 uppercase block tracking-wider">Keyboard & Mouse Config</span>
+                
+                <div>
+                  <span className="text-zinc-500 font-bold block mb-1.5 uppercase text-[9px] tracking-wider text-left">Custom Keybindings:</span>
+                  <div className="max-h-48 overflow-y-auto pr-1 border border-white/5 rounded p-1.5 bg-black/40 space-y-1 text-left">
+                    {Object.entries(InputManager.getInstance().settings.pc.keybinds).map(([actionId, key]) => (
+                      <div key={actionId} className="flex justify-between items-center text-[10px] p-1 border-b border-white/5 last:border-0 hover:bg-white/5 transition-all">
+                        <span className="text-slate-400 font-bold truncate pr-2">{actionId}</span>
+                        <button
+                          onClick={() => setBindingAction(actionId)}
+                          className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold transition-all ${
+                            bindingAction === actionId
+                              ? "bg-red-500/20 text-red-400 border border-red-500/50 animate-pulse cursor-default"
+                              : "bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 text-orange-350 cursor-pointer"
+                          }`}
+                        >
+                          {bindingAction === actionId ? "PRESS KEY..." : (key || "NONE")}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-1 text-slate-300">
+                    <span>MOUSE LOOK SENSITIVITY:</span>
+                    <span className="text-orange-400 font-bold">{InputManager.getInstance().settings.pc.mouseSensitivity.toFixed(2)}x</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.2"
+                    max="3.0"
+                    step="0.05"
+                    value={InputManager.getInstance().settings.pc.mouseSensitivity}
+                    onChange={(e) => {
+                      const im = InputManager.getInstance();
+                      im.settings.pc.mouseSensitivity = parseFloat(e.target.value);
+                      im.saveSettings();
+                      triggerSettingsReload();
+                    }}
+                    className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-1 text-slate-300">
+                    <span>AIM SMOOTHING:</span>
+                    <span className="text-orange-400 font-bold">{InputManager.getInstance().settings.pc.mouseAimSmoothing.toFixed(2)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.0"
+                    max="1.0"
+                    step="0.05"
+                    value={InputManager.getInstance().settings.pc.mouseAimSmoothing}
+                    onChange={(e) => {
+                      const im = InputManager.getInstance();
+                      im.settings.pc.mouseAimSmoothing = parseFloat(e.target.value);
+                      im.saveSettings();
+                      triggerSettingsReload();
+                    }}
+                    className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                  />
+                </div>
+
+                <label className="flex items-center space-x-2 cursor-pointer text-slate-300 select-none pt-1">
+                  <input
+                    type="checkbox"
+                    checked={InputManager.getInstance().settings.pc.cursorLock}
+                    onChange={(e) => {
+                      const im = InputManager.getInstance();
+                      im.settings.pc.cursorLock = e.target.checked;
+                      im.saveSettings();
+                      triggerSettingsReload();
+                    }}
+                    className="accent-orange-500 cursor-pointer w-3.5 h-3.5"
+                  />
+                  <span>POINTER LOCK ON CANVAS METRICS</span>
+                </label>
+              </div>
+
+              {/* 3. Gamepad Specific mappings */}
+              <div className="space-y-3 p-2.5 rounded bg-black/30 border border-white/5">
+                <span className="text-[9px] font-bold text-orange-450 uppercase block tracking-wider">Gamepad Calibration</span>
+                
+                <div>
+                  <div className="flex justify-between mb-1 text-slate-300">
+                    <span>LEFT STICK DEADZONE:</span>
+                    <span className="text-orange-400 font-bold">{(InputManager.getInstance().settings.gamepad.leftDeadzone * 100).toFixed(0)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.05"
+                    max="0.40"
+                    step="0.01"
+                    value={InputManager.getInstance().settings.gamepad.leftDeadzone}
+                    onChange={(e) => {
+                      const im = InputManager.getInstance();
+                      im.settings.gamepad.leftDeadzone = parseFloat(e.target.value);
+                      im.saveSettings();
+                      triggerSettingsReload();
+                    }}
+                    className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-1 text-slate-300">
+                    <span>RIGHT STICK DEADZONE:</span>
+                    <span className="text-orange-400 font-bold">{(InputManager.getInstance().settings.gamepad.rightDeadzone * 100).toFixed(0)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.05"
+                    max="0.40"
+                    step="0.01"
+                    value={InputManager.getInstance().settings.gamepad.rightDeadzone}
+                    onChange={(e) => {
+                      const im = InputManager.getInstance();
+                      im.settings.gamepad.rightDeadzone = parseFloat(e.target.value);
+                      im.saveSettings();
+                      triggerSettingsReload();
+                    }}
+                    className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-1 text-slate-300">
+                    <span>ANALOG TRIGGER THRESHOLD:</span>
+                    <span className="text-orange-400 font-bold">{(InputManager.getInstance().settings.gamepad.triggerThreshold * 100).toFixed(0)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.05"
+                    max="0.50"
+                    step="0.01"
+                    value={InputManager.getInstance().settings.gamepad.triggerThreshold}
+                    onChange={(e) => {
+                      const im = InputManager.getInstance();
+                      im.settings.gamepad.triggerThreshold = parseFloat(e.target.value);
+                      im.saveSettings();
+                      triggerSettingsReload();
+                    }}
+                    className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <label className="flex items-center space-x-2 cursor-pointer text-slate-300 select-none">
+                    <input
+                      type="checkbox"
+                      checked={InputManager.getInstance().settings.gamepad.vibrationEnabled}
+                      onChange={(e) => {
+                        const im = InputManager.getInstance();
+                        im.settings.gamepad.vibrationEnabled = e.target.checked;
+                        im.saveSettings();
+                        triggerSettingsReload();
+                      }}
+                      className="accent-orange-500 cursor-pointer w-3.5 h-3.5"
+                    />
+                    <span>RUMBLE ACTUATOR</span>
+                  </label>
+
+                  <label className="flex items-center space-x-2 cursor-pointer text-slate-300 select-none">
+                    <input
+                      type="checkbox"
+                      checked={InputManager.getInstance().settings.gamepad.reconnectHandling}
+                      onChange={(e) => {
+                        const im = InputManager.getInstance();
+                        im.settings.gamepad.reconnectHandling = e.target.checked;
+                        im.saveSettings();
+                        triggerSettingsReload();
+                      }}
+                      className="accent-orange-555 cursor-pointer w-3.5 h-3.5"
+                    />
+                    <span>RECONNECT ASSIST</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* 4. Touch / mobile configuration */}
+              <div className="space-y-3 p-2.5 rounded bg-black/30 border border-white/5">
+                <span className="text-[9px] font-bold text-orange-450 uppercase block tracking-wider">Touch HUD Setup</span>
+                
+                <div className="grid grid-cols-2 gap-3 pb-1">
+                  <label className="flex items-center space-x-2 cursor-pointer text-slate-300 select-none justify-start">
+                    <input
+                      type="checkbox"
+                      checked={layoutUnlocked}
+                      onChange={(e) => {
+                        setLayoutUnlocked(e.target.checked);
+                        const im = InputManager.getInstance();
+                        im.settings.touch.draggable = e.target.checked;
+                        im.settings.touch.resizable = e.target.checked;
+                        im.saveSettings();
+                        triggerSettingsReload();
+                      }}
+                      className="accent-orange-555 cursor-pointer w-3.5 h-3.5"
+                    />
+                    <span className="font-bold text-[#f43f5e] animate-pulse">DRAG HUD LAYOUT</span>
+                  </label>
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-1 text-slate-300">
+                    <span>VIRTUAL DECK OPACITY:</span>
+                    <span className="text-orange-400 font-bold">{(InputManager.getInstance().settings.touch.opacity * 100).toFixed(0)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.2"
+                    max="1.0"
+                    step="0.05"
+                    value={InputManager.getInstance().settings.touch.opacity}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      const im = InputManager.getInstance();
+                      im.settings.touch.opacity = val;
+                      im.saveSettings();
+                      triggerSettingsReload();
+                    }}
+                    className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-1 text-slate-300">
+                    <span>VIRTUAL ANALOG SIZE:</span>
+                    <span className="text-orange-400 font-bold">{(joystickSize * 100).toFixed(0)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.6"
+                    max="1.8"
+                    step="0.05"
+                    value={joystickSize}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      setJoystickSize(val);
+                      const im = InputManager.getInstance();
+                      im.settings.touch.analogSize = val;
+                      im.saveSettings();
+                    }}
+                    className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-1 text-slate-300">
+                    <span>COMBAT BUTTON SCALE:</span>
+                    <span className="text-orange-400 font-bold">{(actionsSize * 100).toFixed(0)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.6"
+                    max="1.8"
+                    step="0.05"
+                    value={actionsSize}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      setActionsSize(val);
+                      const im = InputManager.getInstance();
+                      im.settings.touch.combatButtonScale = val;
+                      im.saveSettings();
+                    }}
+                    className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                  />
+                </div>
+
+                <div className="flex gap-2 pt-1 border-t border-white/5">
+                  <button
+                    onClick={() => {
+                      const im = InputManager.getInstance();
+                      im.settings.touch.joystickOffset = { x: 0, y: 0 };
+                      im.settings.touch.actionsOffset = { x: 0, y: 0 };
+                      im.settings.touch.analogSize = 1.0;
+                      im.settings.touch.combatButtonScale = 1.0;
+                      im.saveSettings();
+                      triggerSettingsReload();
+                    }}
+                    className="flex-1 px-2.5 py-1.5 rounded border border-white/10 bg-[#0d0d12] hover:bg-zinc-900 font-mono text-[9px] uppercase tracking-wider text-[#d1d1d6] cursor-pointer text-center"
+                  >
+                    Reset Layout
+                  </button>
+                  <button
+                    onClick={() => {
+                      const im = InputManager.getInstance();
+                      im.settings.touch.joystickOffset = joystickOffset;
+                      im.settings.touch.actionsOffset = actionsOffset;
+                      im.saveSettings();
+                      triggerSettingsReload();
+                    }}
+                    className="flex-1 px-2.5 py-1.5 rounded border border-orange-500/30 bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 hover:text-white font-mono text-[9px] uppercase tracking-wider cursor-pointer text-center"
+                  >
+                    Save Layout
+                  </button>
+                </div>
+              </div>
+
+              {/* 5. General Controls reset options */}
+              <button
+                onClick={() => {
+                  const im = InputManager.getInstance();
+                  im.resetToDefault();
+                  triggerSettingsReload();
+                }}
+                className="w-full p-2 rounded border border-red-500/30 bg-red-950/20 hover:bg-red-950/40 text-red-150 hover:text-rose-100 transition-all font-mono text-[10px] cursor-pointer text-center uppercase tracking-widest font-black flex items-center justify-center gap-1.5"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>RESET ALL SPECTRUM CONTROLS</span>
+              </button>
             </div>
           </div>
         )}
@@ -2363,6 +3226,22 @@ export default function App() {
                 </span>
               </button>
 
+              {/* INPUT CALIBRATION (Orange/Amber) */}
+              <button
+                onClick={() => {
+                  setGameState("options");
+                }}
+                className="group relative flex items-center justify-between p-3 rounded border border-orange-500/40 hover:border-orange-400 bg-orange-950/25 hover:bg-orange-950/45 text-orange-200 hover:text-white uppercase font-mono text-xs tracking-widest text-left cursor-pointer shadow-[0_0_12px_rgba(249,115,22,0.15)] hover:shadow-[0_0_20px_rgba(249,115,22,0.3)] transition-all"
+              >
+                <span className="font-bold flex items-center space-x-2">
+                  <span className="text-orange-400 group-hover:translate-x-1 transition-transform">⎔</span>
+                  <span className="tracking-widest">Control Settings</span>
+                </span>
+                <span className="text-[8px] px-1.5 py-0.5 border border-orange-500/35 text-orange-400 font-black rounded bg-orange-950/40">
+                  CONFIG
+                </span>
+              </button>
+
               {/* GITHUB REPOSITORY */}
               <button
                 onClick={() => {
@@ -2382,6 +3261,587 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {gameState === "options" && (
+        <div 
+          className="absolute inset-0 z-50 flex flex-col bg-[#07070c] overflow-y-auto select-none p-6 font-mono text-xs"
+          style={{
+            backgroundImage: `radial-gradient(circle at center, rgba(0,0,0,0.15) 30%, rgba(7,7,12,0.95) 85%), url(${menuBackgroundUrl})`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+          }}
+        >
+          {/* Scanline CRT simulation */}
+          <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0)_50%,rgba(0,0,0,0.7)_100%)] mix-blend-overlay opacity-80" />
+          <div className="absolute inset-0 pointer-events-none bg-repeat opacity-15" style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 200 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='105%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")` }} />
+          <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90.5deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[size:100%_4px,3px_100%] opacity-35 animate-pulse" />
+
+          {/* Core options container */}
+          <div className="w-full max-w-6xl mx-auto flex flex-col space-y-6 relative z-10 py-4">
+            
+            {/* Elegant Header with Glowing Theme */}
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between border-b border-white/10 pb-4">
+              <div className="flex flex-col">
+                <span className="text-[10px] tracking-[0.25em] text-cyan-400 uppercase font-black mb-1">PROJECT ORION SPECTRAL HUB</span>
+                <h1 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-orange-450 via-amber-400 to-rose-500 drop-shadow-[0_0_15px_rgba(249,115,22,0.35)] uppercase tracking-wide">
+                  INPUT CONTROL & CALIBRATION CENTRALE
+                </h1>
+              </div>
+              <button
+                onClick={() => setGameState("menu")}
+                className="mt-3 md:mt-0 px-4 py-2 rounded border border-rose-500/40 hover:border-rose-400 bg-rose-950/20 hover:bg-rose-950/45 text-rose-300 hover:text-white uppercase font-black tracking-widest text-center transition-all cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span>Return to Database</span>
+              </button>
+            </div>
+
+            {/* 3-Column Configuration Layout of Absolute Mastery */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
+              
+              {/* Column 1: Global Configuration and Keybindings */}
+              <div className="p-4 rounded-xl border border-white/5 bg-black/60 backdrop-blur-md space-y-4 shadow-xl">
+                <div className="flex items-center space-x-1.5 pb-2 border-b border-white/10">
+                  <Sliders className="w-4 h-4 text-orange-500" />
+                  <span className="font-bold text-white tracking-widest uppercase">1. Global & Keyboard</span>
+                </div>
+
+                {/* Active Device Display */}
+                <div className="p-2.5 rounded bg-black/55 border border-white/5 flex items-center justify-between text-[11px]">
+                  <span className="text-[9px] text-zinc-500 uppercase font-bold tracking-wider">Active Stream:</span>
+                  <span className="text-emerald-400 font-black uppercase flex items-center gap-1.5 animate-pulse">
+                    <span className="w-2 h-2 rounded-full bg-emerald-405 animate-ping" />
+                    {InputManager.getInstance().getActiveDeviceName()}
+                  </span>
+                </div>
+
+                {/* Global Settings */}
+                <div className="space-y-3.5 pt-1">
+                  <div>
+                    <div className="flex justify-between mb-1 text-slate-300 text-[11px]">
+                      <span>TAP / HOLD THRESHOLD:</span>
+                      <span className="text-orange-400 font-bold">{InputManager.getInstance().settings.global.tapHoldThreshold} ms</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="150"
+                      max="500"
+                      step="10"
+                      value={InputManager.getInstance().settings.global.tapHoldThreshold}
+                      onChange={(e) => {
+                        const im = InputManager.getInstance();
+                        im.settings.global.tapHoldThreshold = parseInt(e.target.value);
+                        im.saveSettings();
+                        triggerSettingsReload();
+                      }}
+                      className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between mb-1 text-slate-300 text-[11px]">
+                      <span>AIM SENSITIVITY:</span>
+                      <span className="text-orange-400 font-bold">{InputManager.getInstance().settings.global.aimSensitivity.toFixed(2)}x</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.2"
+                      max="3.0"
+                      step="0.05"
+                      value={InputManager.getInstance().settings.global.aimSensitivity}
+                      onChange={(e) => {
+                        const im = InputManager.getInstance();
+                        im.settings.global.aimSensitivity = parseFloat(e.target.value);
+                        im.saveSettings();
+                        triggerSettingsReload();
+                      }}
+                      className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Mouse configs */}
+                  <div>
+                    <div className="flex justify-between mb-1 text-slate-300 text-[11px]">
+                      <span>MOUSE SENSITIVITY:</span>
+                      <span className="text-orange-400 font-bold">{InputManager.getInstance().settings.pc.mouseSensitivity.toFixed(2)}x</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.2"
+                      max="3.0"
+                      step="0.05"
+                      value={InputManager.getInstance().settings.pc.mouseSensitivity}
+                      onChange={(e) => {
+                        const im = InputManager.getInstance();
+                        im.settings.pc.mouseSensitivity = parseFloat(e.target.value);
+                        im.saveSettings();
+                        triggerSettingsReload();
+                      }}
+                      className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 pt-1 text-[10px]">
+                    <label className="flex items-center space-x-2 cursor-pointer text-slate-300 select-none">
+                      <input
+                        type="checkbox"
+                        checked={InputManager.getInstance().settings.global.invertAimX}
+                        onChange={(e) => {
+                          const im = InputManager.getInstance();
+                          im.settings.global.invertAimX = e.target.checked;
+                          im.saveSettings();
+                          triggerSettingsReload();
+                        }}
+                        className="accent-orange-500 cursor-pointer w-3.5 h-3.5"
+                      />
+                      <span>INVERT AXIS X</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2 cursor-pointer text-slate-300 select-none">
+                      <input
+                        type="checkbox"
+                        checked={InputManager.getInstance().settings.global.invertAimY}
+                        onChange={(e) => {
+                          const im = InputManager.getInstance();
+                          im.settings.global.invertAimY = e.target.checked;
+                          im.saveSettings();
+                          triggerSettingsReload();
+                        }}
+                        className="accent-orange-500 cursor-pointer w-3.5 h-3.5"
+                      />
+                      <span>INVERT AXIS Y</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Keybindings mapping scroll box */}
+                <div className="pt-2">
+                  <span className="text-zinc-500 font-bold block mb-1.5 uppercase text-[9px] tracking-wider">Custom Action Keybinds:</span>
+                  <div className="max-h-44 overflow-y-auto pr-1 border border-white/5 rounded p-2 bg-black/55 space-y-1">
+                    {Object.entries(InputManager.getInstance().settings.pc.keybinds).map(([actionId, key]) => (
+                      <div key={actionId} className="flex justify-between items-center text-[10px] py-1 border-b border-white/5 last:border-0 hover:bg-white/5 transition-all">
+                        <span className="text-slate-400 font-bold truncate pr-2">{actionId}</span>
+                        <button
+                          onClick={() => setBindingAction(actionId)}
+                          className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold transition-all ${
+                            bindingAction === actionId
+                              ? "bg-red-500/20 text-red-400 border border-red-500/50 animate-pulse cursor-default"
+                              : "bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 text-orange-350 cursor-pointer"
+                          }`}
+                        >
+                          {bindingAction === actionId ? "PRESS KEY..." : (key || "NONE")}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Column 2: Gamepad Calibration and Active Monitor */}
+              <div className="p-4 rounded-xl border border-white/5 bg-black/60 backdrop-blur-md space-y-4 shadow-xl">
+                <div className="flex items-center space-x-1.5 pb-2 border-b border-white/10">
+                  <Sparkles className="w-4 h-4 text-orange-500" />
+                  <span className="font-bold text-white tracking-widest uppercase">2. Gamepad Options</span>
+                </div>
+
+                {/* Deadzones and trigger settings */}
+                <div className="space-y-4 pt-1">
+                  <div>
+                    <div className="flex justify-between mb-1 text-slate-300 text-[11px]">
+                      <span>LEFT LOGICAL DEVIATION (DEADZONE):</span>
+                      <span className="text-orange-400 font-bold">{(InputManager.getInstance().settings.gamepad.leftDeadzone * 100).toFixed(0)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.05"
+                      max="0.40"
+                      step="0.01"
+                      value={InputManager.getInstance().settings.gamepad.leftDeadzone}
+                      onChange={(e) => {
+                        const im = InputManager.getInstance();
+                        im.settings.gamepad.leftDeadzone = parseFloat(e.target.value);
+                        im.saveSettings();
+                        triggerSettingsReload();
+                      }}
+                      className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between mb-1 text-slate-300 text-[11px]">
+                      <span>RIGHT LOGICAL DEVIATION (DEADZONE):</span>
+                      <span className="text-orange-400 font-bold">{(InputManager.getInstance().settings.gamepad.rightDeadzone * 100).toFixed(0)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.05"
+                      max="0.40"
+                      step="0.01"
+                      value={InputManager.getInstance().settings.gamepad.rightDeadzone}
+                      onChange={(e) => {
+                        const im = InputManager.getInstance();
+                        im.settings.gamepad.rightDeadzone = parseFloat(e.target.value);
+                        im.saveSettings();
+                        triggerSettingsReload();
+                      }}
+                      className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between mb-1 text-slate-300 text-[11px]">
+                      <span>ANALOG TRIGGER DEPRESSION THRESHOLD:</span>
+                      <span className="text-orange-400 font-bold">{(InputManager.getInstance().settings.gamepad.triggerThreshold * 100).toFixed(0)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.05"
+                      max="0.50"
+                      step="0.01"
+                      value={InputManager.getInstance().settings.gamepad.triggerThreshold}
+                      onChange={(e) => {
+                        const im = InputManager.getInstance();
+                        im.settings.gamepad.triggerThreshold = parseFloat(e.target.value);
+                        im.saveSettings();
+                        triggerSettingsReload();
+                      }}
+                      className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 pt-1 text-[10px]">
+                    <label className="flex items-center space-x-2 cursor-pointer text-slate-300 select-none">
+                      <input
+                        type="checkbox"
+                        checked={InputManager.getInstance().settings.gamepad.vibrationEnabled}
+                        onChange={(e) => {
+                          const im = InputManager.getInstance();
+                          im.settings.gamepad.vibrationEnabled = e.target.checked;
+                          im.saveSettings();
+                          triggerSettingsReload();
+                        }}
+                        className="accent-orange-500 cursor-pointer w-3.5 h-3.5"
+                      />
+                      <span>VIBRATION CHANNELS</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2 cursor-pointer text-slate-300 select-none">
+                      <input
+                        type="checkbox"
+                        checked={InputManager.getInstance().settings.gamepad.reconnectHandling}
+                        onChange={(e) => {
+                          const im = InputManager.getInstance();
+                          im.settings.gamepad.reconnectHandling = e.target.checked;
+                          im.saveSettings();
+                          triggerSettingsReload();
+                        }}
+                        className="accent-orange-555 cursor-pointer w-3.5 h-3.5"
+                      />
+                      <span>PERSIST CONNECTION</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Live controller visualizer inside options panel */}
+                <div className="border border-white/5 rounded-lg p-3 bg-black/70 space-y-2 mt-2">
+                  <span className="text-[9px] uppercase font-bold text-zinc-500 tracking-wider">Gamepad Stream Monitor:</span>
+                  <div className="text-[10px] text-slate-400 space-y-1 text-left">
+                    {(() => {
+                      const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+                      let activeGamepad = null;
+                      for (let i = 0; i < gps.length; i++) {
+                        if (gps[i]) {
+                          activeGamepad = gps[i];
+                          break;
+                        }
+                      }
+                      if (activeGamepad) {
+                        return (
+                          <>
+                            <div className="text-emerald-400 font-bold text-[10px] truncate">● Connected {activeGamepad.id}</div>
+                            <div className="grid grid-cols-2 gap-1 text-[9px] font-mono mt-1 text-zinc-400">
+                              <div>L-Stick X: {(activeGamepad.axes[0] || 0).toFixed(2)}</div>
+                              <div>L-Stick Y: {(activeGamepad.axes[1] || 0).toFixed(2)}</div>
+                              <div>R-Stick X: {(activeGamepad.axes[2] || 0).toFixed(2)}</div>
+                              <div>R-Stick Y: {(activeGamepad.axes[3] || 0).toFixed(2)}</div>
+                            </div>
+                          </>
+                        );
+                      } else {
+                        return <div className="text-zinc-600 italic">No connected gamepads scanned...</div>;
+                      }
+                    })()}
+                  </div>
+                </div>
+              </div>
+
+              {/* Column 3: Touch / Mobile Calibration HUD */}
+              <div className="p-4 rounded-xl border border-white/5 bg-black/60 backdrop-blur-md space-y-4 shadow-xl">
+                <div className="flex items-center space-x-1.5 pb-2 border-b border-white/10">
+                  <Upload className="w-4 h-4 text-orange-500" />
+                  <span className="font-bold text-white tracking-widest uppercase">3. Mobile Touch Deck</span>
+                </div>
+
+                <div className="space-y-4 pt-1">
+                  {/* Lock/Unlock Toggle for Visual Layout Drags */}
+                  <div className="pb-2 border-b border-white/5">
+                    <label className="flex items-center space-x-2 cursor-pointer text-slate-300 select-none justify-start">
+                      <input
+                        type="checkbox"
+                        checked={layoutUnlocked}
+                        onChange={(e) => {
+                          setLayoutUnlocked(e.target.checked);
+                          const im = InputManager.getInstance();
+                          im.settings.touch.draggable = e.target.checked;
+                          im.settings.touch.resizable = e.target.checked;
+                          im.saveSettings();
+                          triggerSettingsReload();
+                        }}
+                        className="accent-orange-555 cursor-pointer w-4 h-4"
+                      />
+                      <span className="font-sans font-bold text-rose-550 animate-pulse text-[11px] tracking-wide uppercase">DRAG HUD LAYOUT (ACTIVE)</span>
+                    </label>
+                    <span className="text-[9px] text-zinc-500 font-sans block mt-1 leading-normal">
+                      Check to unlock on-screen left/right control deck modules for interactive placement and resizing! Drag red headers.
+                    </span>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between mb-1 text-slate-300 text-[11px]">
+                      <span>VIRTUAL HUD DECK OPACITY:</span>
+                      <span className="text-orange-400 font-bold">{(InputManager.getInstance().settings.touch.opacity * 100).toFixed(0)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.2"
+                      max="1.0"
+                      step="0.05"
+                      value={InputManager.getInstance().settings.touch.opacity}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        const im = InputManager.getInstance();
+                        im.settings.touch.opacity = val;
+                        im.saveSettings();
+                        triggerSettingsReload();
+                      }}
+                      className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between mb-1 text-slate-300 text-[11px]">
+                      <span>LEFT STICK DIAMETER (HUD OP):</span>
+                      <span className="text-orange-400 font-bold">{(joystickSize * 100).toFixed(0)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.6"
+                      max="1.8"
+                      step="0.05"
+                      value={joystickSize}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        setJoystickSize(val);
+                        const im = InputManager.getInstance();
+                        im.settings.touch.analogSize = val;
+                        im.saveSettings();
+                      }}
+                      className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between mb-1 text-slate-300 text-[11px]">
+                      <span>COMBAT ACTION BUTTONS DIAMETER:</span>
+                      <span className="text-orange-400 font-bold">{(actionsSize * 100).toFixed(0)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.6"
+                      max="1.8"
+                      step="0.05"
+                      value={actionsSize}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        setActionsSize(val);
+                        const im = InputManager.getInstance();
+                        im.settings.touch.combatButtonScale = val;
+                        im.saveSettings();
+                      }}
+                      className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Settings Restorage elements */}
+                  <div className="flex flex-col space-y-2 pt-2 border-t border-white/5">
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => {
+                          const im = InputManager.getInstance();
+                          im.settings.touch.joystickOffset = { x: 0, y: 0 };
+                          im.settings.touch.actionsOffset = { x: 0, y: 0 };
+                          im.settings.touch.analogSize = 1.0;
+                          im.settings.touch.combatButtonScale = 1.0;
+                          setJoystickSize(1.0);
+                          setActionsSize(1.0);
+                          setJoystickOffset({ x: 0, y: 0 });
+                          setActionsOffset({ x: 0, y: 0 });
+                          im.saveSettings();
+                          triggerSettingsReload();
+                        }}
+                        className="px-2.5 py-2 rounded border border-white/10 bg-[#0d0d12] hover:bg-zinc-900 font-mono text-[10px] uppercase font-bold tracking-wider text-[#d1d1d6] cursor-pointer text-center"
+                      >
+                        Reset Layout
+                      </button>
+                      
+                      <button
+                        onClick={() => {
+                          const im = InputManager.getInstance();
+                          im.settings.touch.joystickOffset = joystickOffset;
+                          im.settings.touch.actionsOffset = actionsOffset;
+                          im.settings.touch.analogSize = joystickSize;
+                          im.settings.touch.combatButtonScale = actionsSize;
+                          im.saveSettings();
+                          triggerSettingsReload();
+                        }}
+                        className="px-2.5 py-2 rounded border border-orange-500/30 bg-orange-500/15 hover:bg-orange-500/25 text-orange-400 font-mono text-[10px] uppercase font-bold tracking-wider cursor-pointer text-center"
+                      >
+                        Save Layout
+                      </button>
+                    </div>
+                    
+                    <button
+                      onClick={() => {
+                        const im = InputManager.getInstance();
+                        im.resetToDefault();
+                        triggerSettingsReload();
+                      }}
+                      className="w-full p-2 rounded border border-red-500/30 bg-red-950/20 hover:bg-red-950/40 text-red-150 hover:text-rose-100 font-mono text-[10px] cursor-pointer text-center uppercase tracking-widest font-black flex items-center justify-center gap-1.5"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>RESET SPECTRUM SYSTEM</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Calibration Simulator Field */}
+            <div className="p-4 rounded-xl border border-white/5 bg-black/55 backdrop-blur-md text-[10px] flex flex-col space-y-1 lg:space-y-0 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-center space-x-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
+                <span className="text-[#d1d1d6]/50">LATENCY COMPENSATION STATE:</span>
+                <span className="text-cyan-400 font-bold uppercase">PELORUS DIRECT CHANNEL MODE ACTIVE</span>
+              </div>
+              <div className="text-slate-400">
+                Tap physical keys on your keyboard, gamepad, or touch screen to confirm hardware binding readings.
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+      {showInputDebug && <InputDebugPanelComponent />}
     </div>
   );
 }
+
+const InputDebugPanelComponent = () => {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let animId: number;
+    const loop = () => {
+      setTick(prev => prev + 1);
+      animId = requestAnimationFrame(loop);
+    };
+    animId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(animId);
+  }, []);
+
+  const im = InputManager.getInstance();
+  const activeDevice = im.getActiveDeviceName();
+  const moveDir = im.getMoveDirection();
+  const aimDir = im.getAimVector();
+
+  const actionIds = [
+    "LockTarget", "Main1", "Main2", "Off1", "Off2", 
+    "Dash", "WeaponStance", "Interact", "Cancel", "Menu"
+  ];
+
+  const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+  let gpConnected = false;
+  let gpName = "No active gamepad";
+  for (let i = 0; i < gps.length; i++) {
+    const gp = gps[i];
+    if (gp && gp.connected) {
+      gpConnected = true;
+      gpName = gp.id;
+      break;
+    }
+  }
+
+  return (
+    <div className="absolute top-20 right-4 z-40 pointer-events-auto bg-[#07070a]/96 backdrop-blur-md border border-indigo-500/30 rounded-xl p-3.5 w-[280px] shadow-2xl text-[10px] font-mono select-none text-left">
+      <div className="flex items-center justify-between border-b border-indigo-500/20 pb-1.5 mb-2">
+        <span className="font-black text-indigo-400 uppercase tracking-widest flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+          Orion Spectrum Debug
+        </span>
+        <span className="text-[8px] text-zinc-500">[DEV DIAG]</span>
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex justify-between border-b border-white/5 pb-1">
+          <span className="text-zinc-500">ACTIVE DEVICE:</span>
+          <span className="text-emerald-450 font-black">{activeDevice}</span>
+        </div>
+
+        <div className="flex justify-between border-b border-white/5 pb-1">
+          <span className="text-zinc-500">MOVE IN:</span>
+          <span className="text-slate-300 font-bold">{`[${moveDir.x.toFixed(2)}, ${moveDir.z.toFixed(2)}]`}</span>
+        </div>
+
+        <div className="flex justify-between border-b border-white/5 pb-1">
+          <span className="text-zinc-500">AIM VECTOR:</span>
+          <span className="text-slate-300 font-bold">
+            {aimDir ? `[${aimDir.x.toFixed(2)}, ${aimDir.z.toFixed(2)}]` : "NONE"}
+          </span>
+        </div>
+
+        <div className="flex flex-col border-b border-white/5 pb-1.5">
+          <span className="text-zinc-500 mb-1">GAMEPAD HARDWARE:</span>
+          <span className="text-zinc-400 font-bold text-[8px] truncate bg-black/40 p-1 rounded border border-white/5 leading-none">
+            {gpConnected ? gpName : `DISCONNECTED`}
+          </span>
+        </div>
+
+        <div className="flex flex-col space-y-1">
+          <span className="text-indigo-400 font-bold text-[9px] uppercase tracking-wider mb-0.5">Spectrum Action States:</span>
+          <div className="grid grid-cols-2 gap-1.5 text-[9px]">
+            {actionIds.map(actId => {
+              const act = im.getAction(actId);
+              const isHeld = act.held;
+              const duration = act.holdDuration;
+              return (
+                <div key={actId} className="flex justify-between items-center p-1 rounded bg-black/30 border border-white/5">
+                  <span className="text-zinc-400 truncate pr-1">{actId}</span>
+                  <div className="flex flex-col items-end">
+                    <span className={isHeld ? "text-orange-450 font-black" : "text-zinc-650"}>
+                      {isHeld ? "HELD" : "UP"}
+                    </span>
+                    {isHeld && <span className="text-[7.5px] text-zinc-500">{duration.toFixed(0)}ms</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="pt-1 text-[8px] text-zinc-500 text-center uppercase tracking-widest border-t border-white/5">
+          Hold threshold: {im.settings.global.tapHoldThreshold}ms
+        </div>
+      </div>
+    </div>
+  );
+};

@@ -21,6 +21,7 @@ import { LockState, ActionState, HitReactionTier, StatusEffectType, CombatEntity
 import { COMBAT_TUNABLES } from "../combat/CombatConfig";
 import { CombatEngine } from "../combat/CombatEngine";
 import { InputController } from "../input/InputController";
+import { InputManager } from "../input/InputSystem";
 import { IsometricCamera } from "../camera/IsometricCamera";
 import { EnvironmentManager } from "../rendering/EnvironmentManager";
 import { CharacterController } from "../movement/CharacterController";
@@ -242,8 +243,8 @@ export class GameManager {
 
     // Bind Weapons/Dash events
     this.input.onDashPressed = () => {
-      const state = this.input.getInputState();
-      const didDash = this.player.executeDash(state.moveDirection);
+      const moveDir = InputManager.getInstance().getMoveDirection();
+      const didDash = this.player.executeDash(moveDir);
       if (didDash) {
         this.cameraSystem.triggerShake(0.85);
         this.fx.spawnExplosion(this.player.getPosition().add(new Vector3(0, 0.25, 0)), 8, 0.4);
@@ -729,8 +730,8 @@ export class GameManager {
     if (file.name.endsWith(".glb") || file.name.endsWith(".gltf")) {
       const targetWorldPos = this.get3DWorldPointerPos();
       
-      // If the uploaded file is warriorTest.glb or enviroTest.glb, upload it to the workspace server to persist it permanently
-      if (file.name === "warriorTest.glb" || file.name === "enviroTest.glb") {
+      // If the uploaded file is warriorTest.glb, enviroTest.glb, mech_frame.glb or bog_enviro.glb, upload it to the workspace server to persist it permanently
+      if (file.name === "warriorTest.glb" || file.name === "enviroTest.glb" || file.name === "mech_frame.glb" || file.name === "bog_enviro.glb") {
         this.uploadAssetToServer(file);
       }
       
@@ -841,10 +842,10 @@ export class GameManager {
    * Automatically preload user uploaded custom models if they exist in the workspace assets paths
    */
   public async preloadDefaultAssets(): Promise<void> {
-    if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
-
-    // 1. Try preloading the player character model
+    if (this.isDisposed || (this.scene && this.scene.isDisposed)) return    // 1. Try preloading the player character model
     const warriorPaths = [
+      "./assets/models/mechs/mech_frame.glb",
+      "/assets/models/mechs/mech_frame.glb",
       "./assets/models/mechs/warriorTest.glb",
       "/assets/models/mechs/warriorTest.glb",
       "https://raw.githubusercontent.com/x-krizn/Orion-v2/main/public/assets/models/mechs/warriorTest.glb"
@@ -854,15 +855,16 @@ export class GameManager {
     for (const path of warriorPaths) {
       if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
       try {
-        console.log(`[Preloader]: Verifying custom mech warriorTest.glb at ${path}...`);
+        const filename = path.substring(path.lastIndexOf("/") + 1);
+        console.log(`[Preloader]: Verifying custom mech ${filename} at ${path}...`);
         const isValid = await this.verifyGLBPath(path);
         if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
         if (!isValid) {
           console.log(`[Preloader]: Path ${path} does not contain a valid GLB asset. Skipping...`);
           continue;
         }
-
-        console.log(`[Preloader]: Path verified! Attempting to load user custom mech warriorTest.glb via ${path}...`);
+ 
+        console.log(`[Preloader]: Path verified! Attempting to load user custom mech via ${path}...`);
         const results = await SceneLoader.ImportMeshAsync("", "", path, this.scene, undefined, ".glb");
         if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
         const modelRoot = results.meshes[0];
@@ -871,27 +873,29 @@ export class GameManager {
         
         const list: ModelAssetInfo = {
           id: "preloaded_warrior",
-          name: "warriorTest.glb",
+          name: filename,
           type: "character",
           source: "file",
           meshCount: results.meshes.length,
         };
         this.onAssetListChanged([list]);
-        console.log(`[Preloader]: Successfully preloaded custom mech warriorTest.glb via ${path}!`);
+        console.log(`[Preloader]: Successfully preloaded custom mech via ${path}!`);
         loadedWarrior = true;
         break; // Stop on first success
       } catch (e) {
         if (!this.isDisposed && this.scene && !this.scene.isDisposed) {
-          console.warn(`[Preloader]: Path ${path} unsuccessful for warriorTest.glb:`, e);
+          console.warn(`[Preloader]: Path ${path} unsuccessful:`, e);
         }
       }
     }
     if (!loadedWarrior && !this.isDisposed && this.scene && !this.scene.isDisposed) {
-      console.log("[Preloader]: Custom warriorTest.glb is not present on workspace or could not load on any path, using procedural model.");
+      console.log("[Preloader]: Custom mech model is not present on workspace or could not load, using procedural model.");
     }
 
     // 2. Try preloading the arena environment model
     const enviroPaths = [
+      "./assets/tiles/bog_enviro.glb",
+      "/assets/tiles/bog_enviro.glb",
       "./assets/tiles/enviroTest.glb",
       "/assets/tiles/enviroTest.glb",
       "https://raw.githubusercontent.com/x-krizn/Orion-v2/main/public/assets/tiles/enviroTest.glb"
@@ -901,7 +905,8 @@ export class GameManager {
     for (const path of enviroPaths) {
       if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
       try {
-        console.log(`[Preloader]: Verifying custom environment enviroTest.glb at ${path}...`);
+        const filename = path.substring(path.lastIndexOf("/") + 1);
+        console.log(`[Preloader]: Verifying custom environment ${filename} at ${path}...`);
         const isValid = await this.verifyGLBPath(path);
         if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
         if (!isValid) {
@@ -909,20 +914,20 @@ export class GameManager {
           continue;
         }
 
-        console.log(`[Preloader]: Path verified! Attempting to load user custom environment enviroTest.glb via ${path}...`);
+        console.log(`[Preloader]: Path verified! Attempting to load user custom environment via ${path}...`);
         await this.environment.preloadEnviroModelFromURL(path);
         if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
-        console.log(`[Preloader]: Successfully preloaded custom environment enviroTest.glb via ${path}!`);
+        console.log(`[Preloader]: Successfully preloaded custom environment via ${path}!`);
         loadedEnviro = true;
         break; // Stop on first success
       } catch (e) {
         if (!this.isDisposed && this.scene && !this.scene.isDisposed) {
-          console.warn(`[Preloader]: Path ${path} unsuccessful for enviroTest.glb:`, e);
+          console.warn(`[Preloader]: Path ${path} unsuccessful:`, e);
         }
       }
     }
     if (!loadedEnviro && !this.isDisposed && this.scene && !this.scene.isDisposed) {
-      console.log("[Preloader]: Custom enviroTest.glb is not present on workspace or could not load on any path, using default grid layout.");
+      console.log("[Preloader]: Custom environment model is not present on workspace or could not load, using default grid layout.");
     }
   }
 
@@ -939,6 +944,34 @@ export class GameManager {
   }
 
   private update(deltaTimeSeconds: number): void {
+    // 1. Tick master centralized input system
+    InputManager.getInstance().update(deltaTimeSeconds);
+
+    const centralInput = InputManager.getInstance();
+
+    // 2. Map actions to Legacy triggers
+    // Tab Tap/Hold or R3 Tap/Hold -> Target Lock and Cycle
+    if (centralInput.getAction("LockTarget").tap) {
+      this.handleUnifiedTargetLock(true, false);
+    } else if (centralInput.getAction("LockTarget").hold) {
+      this.handleUnifiedTargetLock(false, true);
+    }
+
+    // Cancel Tap/Hold -> Cancel Action / Lock Clear
+    if (centralInput.getAction("Cancel").tap || centralInput.getAction("Cancel").hold) {
+      this.triggerActionCancel();
+    }
+
+    // WeaponStance Tap/Hold -> Change sockets / stance swap
+    if (centralInput.getAction("WeaponStance").tap || centralInput.getAction("WeaponStance").hold) {
+      this.triggerStanceSwap();
+    }
+
+    // Interact Tap/Hold -> Core Shockwave burst
+    if (centralInput.getAction("Interact").tap || centralInput.getAction("Interact").hold) {
+      this.triggerContextAction();
+    }
+
     const playerInputState = this.input.getInputState();
 
     // 1. Line of Sight & Range checks on locked targets
@@ -1045,13 +1078,16 @@ export class GameManager {
       }
     }
 
-    // 3. Set independent aiming position based on locked target or cursor/persistent touch tap
+    // 3. Set independent aiming position based on locked target, gamepad aim direction, or cursor/persistent touch tap
     if (this.lockedTargets.length > 0) {
       const enemy = this.lockedTargets[0].enemy;
       const enemyScale = enemy.data?.scale || 1.0;
       const targetPoint = enemy.node.position.clone();
       targetPoint.y = 0.8 * enemyScale;
       this.player.setAimPoint(targetPoint);
+    } else if (playerInputState.aimDirection) {
+      this.persistentAimDirection = playerInputState.aimDirection;
+      this.player.setAimPoint(this.player.getPosition().add(playerInputState.aimDirection.scale(10.0)));
     } else if (this.persistentAimDirection) {
       this.player.setAimPoint(this.player.getPosition().add(this.persistentAimDirection.scale(10.0)));
     } else {
@@ -1199,6 +1235,48 @@ export class GameManager {
 
     this.fx.setThemeColors(primaryColor);
     this.player.setThemeColor(primaryColor);
+  }
+
+  public handleUnifiedTargetLock(tap: boolean, hold: boolean): void {
+    const im = InputManager.getInstance();
+    if (!im.settings.global.lockOnEnabled) return;
+
+    if (tap) {
+      if (this.lockedTargets.length > 0) {
+        this.lockedTargets = [];
+        console.log("[Target Lock]: Cleared target locks via action tap.");
+      } else {
+        const playerPos = this.player.getPosition();
+        let closestEnemy: any = null;
+        let minDist = this.lockRange;
+
+        for (const enemy of this.spawnedEnemies) {
+          const dist = Vector3.Distance(playerPos, enemy.node.position);
+          if (dist < minDist) {
+            minDist = dist;
+            closestEnemy = enemy;
+          }
+        }
+
+        if (closestEnemy) {
+          this.toggleTargetLock(closestEnemy);
+        }
+      }
+    } else if (hold) {
+      if (this.spawnedEnemies.length <= 1) return;
+
+      let nextIndex = 0;
+      if (this.lockedTargets.length > 0) {
+        const currentlyLocked = this.lockedTargets[0].enemy;
+        const currentIdx = this.spawnedEnemies.indexOf(currentlyLocked);
+        nextIndex = (currentIdx + 1) % this.spawnedEnemies.length;
+      }
+
+      const enemyToLock = this.spawnedEnemies[nextIndex];
+      this.lockedTargets = [];
+      this.toggleTargetLock(enemyToLock);
+      console.log(`[Target Cycle]: Cycled target via hold towards ${enemyToLock.data.name}`);
+    }
   }
 
   public toggleTargetLock(enemy: any): void {

@@ -19,10 +19,10 @@ async function startServer() {
 
     // Determine target location in workspace based on standard file names
     let targetPath = "";
-    if (fileName === "warriorTest.glb") {
-      targetPath = path.join(process.cwd(), "public", "assets", "models", "mechs", "warriorTest.glb");
-    } else if (fileName === "enviroTest.glb") {
-      targetPath = path.join(process.cwd(), "public", "assets", "tiles", "enviroTest.glb");
+    if (fileName === "warriorTest.glb" || fileName === "mech_frame.glb") {
+      targetPath = path.join(process.cwd(), "public", "assets", "models", "mechs", fileName);
+    } else if (fileName === "enviroTest.glb" || fileName === "bog_enviro.glb") {
+      targetPath = path.join(process.cwd(), "public", "assets", "tiles", fileName);
     } else {
       console.warn(`[Server]: Unrecognized or restricted file upload target: ${fileName}`);
       return res.status(400).json({ error: "Invalid or restricted asset filename for direct workspace sync." });
@@ -52,6 +52,7 @@ async function startServer() {
 
   // Vite development middleware vs Static Production serving
   if (process.env.NODE_ENV !== "production") {
+    app.use(express.static(path.join(process.cwd(), "public")));
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",

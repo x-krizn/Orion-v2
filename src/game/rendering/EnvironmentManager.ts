@@ -835,13 +835,14 @@ export class EnvironmentManager {
         this.onLibraryItemsChanged(this.libraryItems.map(item => ({ id: item.id, name: item.name })));
       }
 
+      const filename = url.substring(url.lastIndexOf("/") + 1);
       const uniqueId = "asset_preloaded_enviro";
       const newAsset: ModelAssetInfo = {
         id: uniqueId,
-        name: "enviroTest.glb",
+        name: filename,
         type: "environment",
         source: "file",
-        filePath: "enviroTest.glb",
+        filePath: filename,
         meshCount: result.meshes.length,
       };
 

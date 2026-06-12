@@ -53,6 +53,7 @@ export interface PlayerInput {
   dashTriggered: boolean;
   secondaryTriggered: boolean;
   selectedAbility: number; // 0, 1, 2
+  aimDirection?: Vector3;
 }
 
 export interface FXTrigger {
