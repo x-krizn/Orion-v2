@@ -128,6 +128,7 @@ export default function App() {
   const [glowIntensity, setGlowIntensity] = useState<number>(0.85);
   const [bloomWeight, setBloomWeight] = useState<number>(0.5);
   const [exposure, setExposure] = useState<number>(1.1);
+  const [shieldRefraction, setShieldRefraction] = useState<number>(1.35);
   const [fov, setFov] = useState<number>(0.35);
   const [cameraDist, setCameraDist] = useState<number>(36);
   const [pitch, setPitch] = useState<number>(40);
@@ -506,6 +507,11 @@ export default function App() {
   const handleExposureChange = (val: number) => {
     setExposure(val);
     gameManagerRef.current?.updateRenderingSettings("exposure", val);
+  };
+
+  const handleShieldRefractionChange = (val: number) => {
+    setShieldRefraction(val);
+    gameManagerRef.current?.updateRenderingSettings("shieldRefraction", val);
   };
 
   const handleFovChange = (val: number) => {
@@ -2899,6 +2905,23 @@ export default function App() {
                   step="0.1"
                   value={exposure}
                   onChange={(e) => handleExposureChange(parseFloat(e.target.value))}
+                  className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
+                />
+              </div>
+
+              <div>
+                <div className="flex justify-between text-[11px] font-mono text-[#d1d1d6] mb-1">
+                  <span>SHIELD REFRACTION (IoR):</span>
+                  <span className="text-orange-400 font-bold">{shieldRefraction.toFixed(2)}</span>
+                </div>
+                <input
+                  id="shieldRefractionSlider"
+                  type="range"
+                  min="1.0"
+                  max="2.5"
+                  step="0.05"
+                  value={shieldRefraction}
+                  onChange={(e) => handleShieldRefractionChange(parseFloat(e.target.value))}
                   className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
                 />
               </div>

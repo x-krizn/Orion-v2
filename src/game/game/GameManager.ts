@@ -57,6 +57,7 @@ export class GameManager {
         bloomWeight: 0.5,
         exposure: 1.1,
         tonemapping: ImageProcessingConfiguration.TONEMAPPING_ACES,
+        shieldRefraction: 1.35,
       },
       environment: {
         arenaSize: 50,
@@ -1207,6 +1208,11 @@ export class GameManager {
     } else {
       if (this.glowLayer && key === "glowIntensity") {
         this.glowLayer.intensity = value;
+      }
+      if (key === "shieldRefraction") {
+        if (this.player) {
+          (this.player as any).shieldRefractionMultiplier = value;
+        }
       }
       if (this.defaultPipeline) {
         if (key === "bloomWeight") {

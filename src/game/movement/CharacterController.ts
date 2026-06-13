@@ -8,6 +8,7 @@ import {
   Mesh,
   MeshBuilder,
   StandardMaterial,
+  PBRMaterial,
   Color3,
   Vector3,
   TransformNode,
@@ -196,6 +197,10 @@ export class CharacterController {
   private customSwayRoll = 0.04;
   private customCollisionRadius = 0.7;
 
+  // Active Refracting Shield properties
+  public shieldRefractionMultiplier: number = 1.35;
+  public refractiveShieldBubble: Mesh | null = null;
+
   // Visual sub-meshes for flashing
   private flashMeshes: Mesh[] = [];
   private pulseMaterials: StandardMaterial[] = [];
@@ -357,6 +362,22 @@ export class CharacterController {
     combustionZone.position.set(0, 0.25, 0);
     combustionZone.material = combustionMat;
     combustionZone.parent = hoverBase;
+
+    // High fidelity glass refraction shield layer mounting
+    const shieldMat = new PBRMaterial("refractiveShieldMat", this.scene);
+    shieldMat.linkRefractionWithTransparency = true;
+    shieldMat.indexOfRefraction = this.shieldRefractionMultiplier;
+    shieldMat.alpha = 0.35;
+    shieldMat.microSurface = 0.85;
+    shieldMat.albedoColor = new Color3(0.0, 0.95, 1.0); // Neon cyan energetical core
+    shieldMat.emissiveColor = new Color3(0.0, 0.35, 0.5); // Emissive glowing energy boundaries
+    shieldMat.reflectivityColor = new Color3(0.12, 0.12, 0.12);
+
+    this.refractiveShieldBubble = MeshBuilder.CreateSphere("refractiveShieldBubble", { diameter: 3.2, segments: 24 }, this.scene);
+    this.refractiveShieldBubble.position.set(0, 1.6, 0);
+    this.refractiveShieldBubble.material = shieldMat;
+    this.refractiveShieldBubble.parent = this.torsoAssembly;
+    this.refractiveShieldBubble.setEnabled(false); // Hidden by default until activated
   }
 
   /**
@@ -1055,6 +1076,27 @@ export class CharacterController {
         }
         this.currentAction.elapsed = totalElapsed;
       }
+    }
+
+    // 1.5. Dynamic Refracting Shield Visual Updates
+    if (this.currentAction && this.currentAction.id === "aegis_block") {
+      this.refractiveShieldBubble?.setEnabled(true);
+      if (this.refractiveShieldBubble) {
+        const time = this.currentAction.elapsed || 0;
+        const scalePulse = 1.0 + Math.sin(time * 12) * 0.05;
+        this.refractiveShieldBubble.scaling.set(scalePulse, scalePulse, scalePulse);
+        
+        const mat = this.refractiveShieldBubble.material as PBRMaterial;
+        if (mat) {
+          const glowOsc = 0.35 + Math.sin(time * 8) * 0.1;
+          mat.emissiveColor.set(0.0, glowOsc, glowOsc * 1.5);
+          
+          // Shimmer Index of Refraction matching the configured UI multiplier
+          mat.indexOfRefraction = this.shieldRefractionMultiplier + Math.sin(time * 6) * 0.05;
+        }
+      }
+    } else {
+      this.refractiveShieldBubble?.setEnabled(false);
     }
 
     // 1. Process cooldown timers
