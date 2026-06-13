@@ -50,20 +50,14 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
-  // Always serve static assets from public first, ensuring /data and other files are accessible
-  app.use(express.static(path.join(process.cwd(), "public")));
-
   // Vite development middleware vs Static Production serving
-  const useProd = process.env.NODE_ENV === "production" && fs.existsSync(path.join(process.cwd(), "dist"));
-  if (!useProd) {
-    console.log("[Server]: Booting in DEVELOPMENT/FALLBACK mode with Vite middlewares.");
+  if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
-    console.log("[Server]: Serving static production files from dist.");
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {

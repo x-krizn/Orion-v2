@@ -28,7 +28,6 @@ export interface GameSettings {
       bloomWeight: number;
       exposure: number;
       tonemapping: number; // ImageProcessingConfiguration.TONEMAPPING_ACES = 1, etc.
-      shieldRefraction: number;
     };
     environment: {
       arenaSize: number;

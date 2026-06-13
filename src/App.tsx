@@ -128,7 +128,6 @@ export default function App() {
   const [glowIntensity, setGlowIntensity] = useState<number>(0.85);
   const [bloomWeight, setBloomWeight] = useState<number>(0.5);
   const [exposure, setExposure] = useState<number>(1.1);
-  const [shieldRefraction, setShieldRefraction] = useState<number>(1.35);
   const [fov, setFov] = useState<number>(0.35);
   const [cameraDist, setCameraDist] = useState<number>(36);
   const [pitch, setPitch] = useState<number>(40);
@@ -509,11 +508,6 @@ export default function App() {
     gameManagerRef.current?.updateRenderingSettings("exposure", val);
   };
 
-  const handleShieldRefractionChange = (val: number) => {
-    setShieldRefraction(val);
-    gameManagerRef.current?.updateRenderingSettings("shieldRefraction", val);
-  };
-
   const handleFovChange = (val: number) => {
     setFov(val);
     gameManagerRef.current?.updateCameraConfig("fov", val);
@@ -658,387 +652,6 @@ export default function App() {
   // ----------------------------------------------------
   // Draggable HUD & Layout drag logic
   // ----------------------------------------------------
-  interface HUDComponent {
-    id: string;
-    name: string;
-    anchorX: "left" | "right";
-    anchorY: "top" | "bottom";
-    x: number; // offset in pixels
-    y: number; // offset in pixels
-    size: number;
-    visible: boolean;
-    width: number;
-    height: number;
-  }
-
-  const DEFAULT_HUD_LAYOUT: HUDComponent[] = [
-    { id: "driveStick", name: "Drive Stick", anchorX: "left", anchorY: "bottom", x: 24, y: 24, size: 1.0, visible: true, width: 100, height: 110 },
-    { id: "leftShoulder", name: "L1 / L2 Triggers", anchorX: "left", anchorY: "bottom", x: 125, y: 144, size: 1.0, visible: true, width: 110, height: 60 },
-    { id: "systemPanel", name: "System Config", anchorX: "left", anchorY: "bottom", x: 135, y: 24, size: 1.0, visible: true, width: 70, height: 100 },
-    { id: "dpad", name: "D-Pad Module", anchorX: "left", anchorY: "bottom", x: 220, y: 24, size: 1.0, visible: true, width: 90, height: 110 },
-    
-    { id: "aimStick", name: "Aim & Fire Stick", anchorX: "right", anchorY: "bottom", x: 24, y: 24, size: 1.0, visible: true, width: 100, height: 110 },
-    { id: "rightShoulder", name: "R1 / R2 Triggers", anchorX: "right", anchorY: "bottom", x: 125, y: 144, size: 1.0, visible: true, width: 110, height: 60 },
-    { id: "faceButtons", name: "Face Module (A/B/X/Y)", anchorX: "right", anchorY: "bottom", x: 220, y: 24, size: 1.0, visible: true, width: 90, height: 110 },
-  ];
-
-  const [hudComponents, setHudComponents] = useState<HUDComponent[]>(() => {
-    try {
-      const stored = localStorage.getItem("orion_hud_layout_v2");
-      if (stored) {
-        return JSON.parse(stored);
-      }
-    } catch (_) {}
-    return DEFAULT_HUD_LAYOUT;
-  });
-
-  const [autoSnap, setAutoSnap] = useState<boolean>(true);
-  const [gridSize, setGridSize] = useState<number>(20);
-  const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
-
-  const [activeHUDDrag, setActiveHUDDrag] = useState<string | null>(null);
-  const hudDragStartRef = useRef({ x: 0, y: 0 });
-  const hudDragInitialOffsetRef = useRef({ x: 0, y: 0, anchorX: "left" as "left" | "right", anchorY: "top" as "top" | "bottom" });
-
-  const saveHUDLayout = (layout: HUDComponent[]) => {
-    setHudComponents(layout);
-    try {
-      localStorage.setItem("orion_hud_layout_v2", JSON.stringify(layout));
-    } catch (_) {}
-  };
-
-  const resetHUDLayout = () => {
-    saveHUDLayout(DEFAULT_HUD_LAYOUT);
-    setSelectedComponentId(null);
-  };
-
-  const updateComponentSize = (id: string, size: number) => {
-    const adjusted = hudComponents.map(c => {
-      if (c.id === id) {
-        return { ...c, size };
-      }
-      return c;
-    });
-    saveHUDLayout(adjusted);
-  };
-
-  const handleHUDDragStart = (id: string, e: React.MouseEvent | React.TouchEvent) => {
-    if (!layoutUnlocked) return;
-    e.stopPropagation();
-    setActiveHUDDrag(id);
-    setSelectedComponentId(id);
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    
-    hudDragStartRef.current = { x: clientX, y: clientY };
-    const comp = hudComponents.find(c => c.id === id);
-    if (comp) {
-      hudDragInitialOffsetRef.current = { 
-        x: comp.x, 
-        y: comp.y, 
-        anchorX: comp.anchorX, 
-        anchorY: comp.anchorY 
-      };
-    }
-  };
-
-  const handleHUDDragMove = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!activeHUDDrag) return;
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    
-    const dx = clientX - hudDragStartRef.current.x;
-    const dy = clientY - hudDragStartRef.current.y;
-    
-    const parentWidth = window.innerWidth;
-    const parentHeight = window.innerHeight;
-    
-    const comp = hudComponents.find(c => c.id === activeHUDDrag);
-    if (!comp) return;
-    
-    let startAbsX = 0;
-    let startAbsY = 0;
-    
-    const scaledWidth = comp.width * comp.size;
-    const scaledHeight = comp.height * comp.size;
-    
-    if (hudDragInitialOffsetRef.current.anchorX === "left") {
-      startAbsX = hudDragInitialOffsetRef.current.x;
-    } else {
-      startAbsX = parentWidth - hudDragInitialOffsetRef.current.x - scaledWidth;
-    }
-    
-    if (hudDragInitialOffsetRef.current.anchorY === "top") {
-      startAbsY = hudDragInitialOffsetRef.current.y;
-    } else {
-      startAbsY = parentHeight - hudDragInitialOffsetRef.current.y - scaledHeight;
-    }
-    
-    let currentAbsX = startAbsX + dx;
-    let currentAbsY = startAbsY + dy;
-    
-    currentAbsX = Math.max(0, Math.min(parentWidth - scaledWidth, currentAbsX));
-    currentAbsY = Math.max(0, Math.min(parentHeight - scaledHeight, currentAbsY));
-    
-    const isLeft = (currentAbsX + scaledWidth / 2) < (parentWidth / 2);
-    const isTop = (currentAbsY + scaledHeight / 2) < (parentHeight / 2);
-    
-    const nextAnchorX = isLeft ? "left" : "right";
-    const nextAnchorY = isTop ? "top" : "bottom";
-    
-    let nextX = 0;
-    let nextY = 0;
-    
-    if (nextAnchorX === "left") {
-      nextX = currentAbsX;
-    } else {
-      nextX = parentWidth - currentAbsX - scaledWidth;
-    }
-    
-    if (nextAnchorY === "top") {
-      nextY = currentAbsY;
-    } else {
-      nextY = parentHeight - currentAbsY - scaledHeight;
-    }
-    
-    setHudComponents(prev => prev.map(c => {
-      if (c.id === activeHUDDrag) {
-        return {
-          ...c,
-          anchorX: nextAnchorX,
-          anchorY: nextAnchorY,
-          x: nextX,
-          y: nextY
-        };
-      }
-      return c;
-    }));
-  };
-
-  const handleHUDDragEnd = () => {
-    if (!activeHUDDrag) return;
-    
-    let finalLayout = [...hudComponents];
-    if (autoSnap) {
-      finalLayout = finalLayout.map(c => {
-        if (c.id === activeHUDDrag) {
-          const snappedX = Math.round(c.x / gridSize) * gridSize;
-          const snappedY = Math.round(c.y / gridSize) * gridSize;
-          return {
-            ...c,
-            x: snappedX,
-            y: snappedY
-          };
-        }
-        return c;
-      });
-    }
-    
-    saveHUDLayout(finalLayout);
-    setActiveHUDDrag(null);
-  };
-
-  const renderComponentContent = (id: string) => {
-    switch (id) {
-      case "driveStick":
-        return (
-          <div className="flex flex-col items-center">
-            <span className="text-[6.5px] text-zinc-500 font-bold mb-1 uppercase tracking-widest leading-none">DRIVE STICK</span>
-            <div
-              ref={joystickBoundRef}
-              onPointerDown={handleJoystickPointerDown}
-              onPointerMove={handleJoystickPointerMove}
-              onPointerUp={handleJoystickPointerUpOrCancel}
-              onPointerCancel={handleJoystickPointerUpOrCancel}
-              className="relative w-18 h-18 rounded-full bg-zinc-950/20 border border-zinc-800/40 flex items-center justify-center shadow-inner touch-none cursor-pointer"
-            >
-              <div className="absolute inset-1.5 rounded-full border border-zinc-800/10 pointer-events-none" />
-              <div className="absolute top-1/2 left-1 right-1 h-[1px] bg-zinc-800/10 pointer-events-none" />
-              <div className="absolute left-1/2 top-1 bottom-1 w-[1px] bg-zinc-800/10 pointer-events-none" />
-              
-              <div
-                ref={joystickKnobRef}
-                className="w-8 h-8 rounded-full bg-gradient-to-tr from-zinc-850 to-zinc-700 border border-zinc-650 shadow-[0_4px_10px_rgba(0,0,0,0.4)] flex items-center justify-center pointer-events-none transition-transform duration-75"
-                style={{ transform: "translate(0px, 0px)" }}
-              >
-                <div className="w-3 h-3 rounded-full bg-zinc-950/30 border border-zinc-805/50" />
-              </div>
-            </div>
-          </div>
-        );
-      case "aimStick":
-        return (
-          <div className="flex flex-col items-center">
-            <span className="text-[6.5px] text-zinc-500 font-bold mb-1 uppercase tracking-widest leading-none">AIM & FIRE</span>
-            <div
-              ref={aimBoundRef}
-              onPointerDown={handleAimPointerDown}
-              onPointerMove={handleAimPointerMove}
-              onPointerUp={handleAimPointerUpOrCancel}
-              onPointerCancel={handleAimPointerUpOrCancel}
-              className="relative w-18 h-18 rounded-full bg-zinc-950/20 border border-zinc-800/40 flex items-center justify-center shadow-inner touch-none cursor-pointer"
-            >
-              <div className="absolute inset-1.5 rounded-full border border-zinc-800/10 pointer-events-none" />
-              <div className="absolute top-1/2 left-1 right-1 h-[1px] bg-zinc-800/10 pointer-events-none" />
-              <div className="absolute left-1/2 top-1 bottom-1 w-[1px] bg-zinc-800/10 pointer-events-none" />
-              
-              <div
-                ref={aimKnobRef}
-                className="w-8 h-8 rounded-full bg-gradient-to-tr from-zinc-850 to-zinc-700 border border-zinc-650 shadow-[0_4px_10px_rgba(0,0,0,0.4)] flex items-center justify-center pointer-events-none transition-transform duration-75"
-                style={{ transform: "translate(0px, 0px)" }}
-              >
-                <div className="w-3 h-3 rounded-full bg-zinc-950/30 border border-zinc-805/50" />
-              </div>
-            </div>
-          </div>
-        );
-      case "leftShoulder":
-        return (
-          <div className="flex flex-col items-center justify-center w-full h-full">
-            <span className="text-[5.5px] text-zinc-500 font-bold mb-1 uppercase tracking-wider">LEFT TRIGGERS</span>
-            <div className="flex space-x-1.5">
-              <button
-                {...bindInputButton(() => gameManagerRef.current?.triggerL2_OffSecondary())}
-                className="flex flex-col items-center justify-center h-8 w-11 bg-black/30 hover:bg-cyan-500/10 border border-cyan-500/30 text-cyan-350 rounded hover:text-white transition-all cursor-pointer shadow active:scale-95 leading-none"
-                title="Vortex Rail Cannon (L2)"
-              >
-                <span className="text-[7px] font-black text-rose-100">L2 RAIL</span>
-              </button>
-              <button
-                {...bindInputButton(() => gameManagerRef.current?.triggerL1_OffPrimary())}
-                className="flex flex-col items-center justify-center h-8 w-11 bg-black/30 hover:bg-slate-500/10 border border-zinc-700 text-[#d1d1d6] rounded hover:text-white transition-all cursor-pointer shadow active:scale-95 leading-none"
-                title="Shield Parry Defend (L1)"
-              >
-                <span className="text-[7px] font-black text-slate-350">L1 SHLD</span>
-              </button>
-            </div>
-          </div>
-        );
-      case "rightShoulder":
-        return (
-          <div className="flex flex-col items-center justify-center w-full h-full">
-            <span className="text-[5.5px] text-zinc-500 font-bold mb-1 uppercase tracking-wider text-right">RIGHT TRIGGERS</span>
-            <div className="flex space-x-1.5">
-              <button
-                {...bindInputButton(() => gameManagerRef.current?.triggerR1_Primary())}
-                className="flex flex-col items-center justify-center h-8 w-11 bg-black/30 hover:bg-orange-500/10 border border-orange-550/30 text-orange-255 rounded hover:text-white transition-all cursor-pointer shadow active:scale-95 leading-none"
-                title="Primary Laser Slash (R1)"
-              >
-                <span className="text-[7px] font-black text-orange-455">R1 PULSE</span>
-              </button>
-              <button
-                {...bindInputButton(() => gameManagerRef.current?.triggerR2_Secondary())}
-                className="flex flex-col items-center justify-center h-8 w-11 bg-black/30 hover:bg-rose-500/10 border border-rose-550/30 text-rose-350 rounded hover:text-white transition-all cursor-pointer shadow active:scale-95 leading-none"
-                title="Secondary Heavy Mortar (R2)"
-              >
-                <span className="text-[7px] font-black text-rose-455">R2 MRTR</span>
-              </button>
-            </div>
-          </div>
-        );
-      case "systemPanel":
-        return (
-          <div className="flex flex-col items-center justify-center">
-            <span className="text-[6px] text-zinc-500 font-bold mb-1 uppercase tracking-widest leading-none">SYSTEM</span>
-            <div className="flex flex-col space-y-1.5 items-center bg-black/20 border border-zinc-900/40 p-1 rounded-lg shadow-inner w-12">
-              <button
-                onClick={() => setShowTelemetry(!showTelemetry)}
-                className={`w-9 h-3.5 rounded-full border shadow transition-all cursor-pointer active:scale-90 flex items-center justify-center ${
-                  showTelemetry
-                    ? "bg-cyan-500/40 border-cyan-400 text-cyan-400 font-bold"
-                    : "bg-zinc-800 border-zinc-705 text-zinc-400"
-                }`}
-                title="Toggle Telemetry Diagnostics"
-              >
-                <span className="text-[5px] font-black uppercase tracking-tighter">SEL</span>
-              </button>
-              <button
-                {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
-                className="w-9 h-3.5 rounded-full bg-red-950/25 hover:bg-red-900/20 border border-red-500/40 text-red-400 shadow active:scale-90 flex items-center justify-center transition-all cursor-pointer"
-                title="Weapon/Matrix Stance Swap"
-              >
-                <span className="text-[5px] font-black uppercase tracking-tighter">START</span>
-              </button>
-            </div>
-          </div>
-        );
-      case "dpad":
-        return (
-          <div className="flex flex-col items-center">
-            <span className="text-[6px] text-zinc-500 font-bold mb-1 uppercase tracking-widest">D-PAD</span>
-            <div className="relative w-15 h-15 bg-zinc-950/20 border border-zinc-800/40 rounded-full select-none shadow-inner flex items-center justify-center scale-90">
-              <button
-                {...bindInputButton(() => setShowTelemetry(!showTelemetry))}
-                className="absolute top-0.5 w-4.5 h-3.5 rounded bg-black/40 border border-zinc-805/30 hover:bg-zinc-800 text-zinc-350 text-[6px] font-bold flex items-center justify-center cursor-pointer shadow-sm"
-                title="D-Pad Up"
-              >
-                ▲
-              </button>
-              <button
-                {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
-                className="absolute left-0.5 w-3.5 h-4.5 rounded bg-black/40 border border-zinc-805/30 hover:bg-zinc-800 text-zinc-350 text-[6px] font-bold flex items-center justify-center cursor-pointer shadow-sm"
-                title="D-Pad Left"
-              >
-                ◀
-              </button>
-              <button
-                {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
-                className="absolute right-0.5 w-3.5 h-4.5 rounded bg-black/40 border border-zinc-805/30 hover:bg-zinc-800 text-zinc-350 text-[6px] font-bold flex items-center justify-center cursor-pointer shadow-sm"
-                title="D-Pad Right"
-              >
-                ▶
-              </button>
-              <button
-                {...bindInputButton(() => { setShowCombatDebug(!showCombatDebug); })}
-                className="absolute bottom-0.5 w-4.5 h-3.5 rounded bg-black/40 border border-zinc-805/30 hover:bg-zinc-800 text-zinc-350 text-[6px] font-bold flex items-center justify-center cursor-pointer shadow-sm"
-                title="D-Pad Down"
-              >
-                ▼
-              </button>
-            </div>
-          </div>
-        );
-      case "faceButtons":
-        return (
-          <div className="flex flex-col items-center">
-            <span className="text-[6px] text-zinc-500 font-bold mb-1 uppercase tracking-widest leading-none">FACE MODULE</span>
-            <div className="relative w-15 h-15 bg-zinc-950/25 border border-zinc-800/40 rounded-full select-none shadow-inner flex items-center justify-center scale-90">
-              <button
-                {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
-                className="absolute top-0.5 w-5 h-5 rounded-full bg-black/40 hover:bg-yellow-500/20 border border-yellow-500/40 hover:border-yellow-400 text-yellow-450 font-bold text-[7px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
-                title="Stance Swap (Y)"
-              >
-                Y
-              </button>
-              <button
-                {...bindInputButton(() => gameManagerRef.current?.triggerActionCancel())}
-                className="absolute left-0.5 w-5 h-5 rounded-full bg-black/40 hover:bg-blue-500/20 border border-blue-500/40 hover:border-blue-400 text-blue-405 font-bold text-[7px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
-                title="Clear / Interrupt Locks (X)"
-              >
-                X
-              </button>
-              <button
-                {...bindInputButton(() => gameManagerRef.current?.triggerButtonDash())}
-                className="absolute right-0.5 w-5 h-5 rounded-full bg-gradient-to-tr from-red-650 to-rose-500 border border-red-500/50 text-white font-extrabold text-[7px] flex items-center justify-center active:scale-95 transition-all cursor-pointer shadow"
-                title="Thruster Dash Booster (B)"
-              >
-                B
-              </button>
-              <button
-                {...bindInputButton(() => gameManagerRef.current?.triggerContextAction())}
-                className="absolute bottom-0.5 w-5 h-5 rounded-full bg-black/40 hover:bg-emerald-500/20 border border-emerald-500/40 hover:border-emerald-400 text-emerald-450 font-bold text-[7px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
-                title="Shockwave Context Trigger (A)"
-              >
-                A
-              </button>
-            </div>
-          </div>
-        );
-      default:
-        return null;
-    }
-  };
-
   const [activeDragTarget, setActiveDragTarget] = useState<"joystick" | "actions" | null>(null);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const initialOffsetRef = useRef({ x: 0, y: 0 });
@@ -1055,10 +668,6 @@ export default function App() {
   };
 
   const handleDragMoveRelative = (e: React.MouseEvent | React.TouchEvent) => {
-    if (activeHUDDrag) {
-      handleHUDDragMove(e);
-      return;
-    }
     if (!activeDragTarget) return;
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
@@ -1080,10 +689,6 @@ export default function App() {
   };
 
   const handleDragEndRelative = () => {
-    if (activeHUDDrag) {
-      handleHUDDragEnd();
-      return;
-    }
     if (activeDragTarget) {
       const im = InputManager.getInstance();
       im.settings.touch.joystickOffset = joystickOffset;
@@ -1408,164 +1013,329 @@ export default function App() {
       {/* ---------------------------------------------------- */}
       {showJoystick && (
         <>
-          {/* Cybermatic Visual Grid Overlay active during layout edit sessions */}
-          {layoutUnlocked && (
-            <div 
-              className="absolute inset-0 z-3 pointer-events-none select-none transition-opacity duration-300"
-              style={{
-                backgroundImage: `
-                  linear-gradient(to right, rgba(239, 68, 68, 0.08) 1px, transparent 1px),
-                  linear-gradient(to bottom, rgba(239, 68, 68, 0.08) 1px, transparent 1px)
-                `,
-                backgroundSize: `${gridSize}px ${gridSize}px`
-              }}
-            />
-          )}
-
-          {/* Quick HUD Customization / Layout Editor Control Dashboard */}
-          {layoutUnlocked && (
-            <div className="absolute top-20 left-1/2 -translate-x-1/2 z-10 bg-slate-950/90 border border-rose-500/50 rounded-xl p-3 px-5 shadow-2xl flex flex-col items-center gap-2 text-white font-mono pointer-events-auto max-w-sm sm:max-w-md w-full animate-fade-in">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
-                <span className="text-xs font-black text-rose-500 tracking-wider uppercase">HUD Layout Grid Rig</span>
-              </div>
-              <p className="text-[10px] text-zinc-400 text-center leading-normal">
-                Drag any component's red handle to reposition. Switch components left to right across the screen center line!
-              </p>
-              
-              <div className="flex items-center justify-between gap-4 w-full border-t border-zinc-900 pt-2 mt-1">
-                <label className="flex items-center gap-1.5 cursor-pointer text-[10px] select-none text-zinc-300 hover:text-white transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={autoSnap} 
-                    onChange={(e) => setAutoSnap(e.target.checked)} 
-                    className="accent-red-500 w-3.5 h-3.5 cursor-pointer rounded bg-zinc-900 border-zinc-700" 
-                  />
-                  <span>AUTO-SNAP (GRID)</span>
-                </label>
-                <div className="flex gap-1.5">
-                  <button 
-                    onClick={() => { setGridSize(prev => prev === 10 ? 20 : prev === 20 ? 40 : 10); }}
-                    className="bg-zinc-900 hover:bg-zinc-800 text-white rounded px-2 py-1 text-[9px] border border-zinc-800 cursor-pointer font-bold transition-all"
-                  >
-                    GRID: {gridSize}px
-                  </button>
-                  <button 
-                    onClick={resetHUDLayout}
-                    className="bg-red-950/40 hover:bg-red-900/50 border border-red-505/30 text-rose-300 rounded px-2 py-1 text-[9px] cursor-pointer font-bold transition-all"
-                  >
-                    RESET ALL
-                  </button>
-                </div>
-              </div>
-
-              {selectedComponentId && (
-                <div className="flex items-center justify-between w-full border-t border-zinc-900 pt-2 mt-1 text-[10px] text-zinc-400">
-                  <span className="truncate">SELECTED: <strong className="text-orange-400 font-extrabold uppercase">{hudComponents.find(c => c.id === selectedComponentId)?.name}</strong></span>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <span>SIZE:</span>
-                    <input 
-                      type="range" 
-                      min="0.5" 
-                      max="1.5" 
-                      step="0.05" 
-                      value={hudComponents.find(c => c.id === selectedComponentId)?.size ?? 1.0}
-                      onChange={(e) => updateComponentSize(selectedComponentId, parseFloat(e.target.value))}
-                      className="accent-orange-550 w-16 h-1 cursor-pointer rounded-lg bg-zinc-805"
-                    />
-                    <span className="text-[9px] font-black text-orange-400 w-8 text-right shrink-0">{((hudComponents.find(c => c.id === selectedComponentId)?.size ?? 1.0) * 100).toFixed(0)}%</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Individual, Absolute-Positioned Floating HUD Widgets */}
-          {hudComponents.map((comp) => {
-            if (!comp.visible) return null;
-            
-            const isSelected = selectedComponentId === comp.id;
-            const isDragged = activeHUDDrag === comp.id;
-            
-            // Generate styles adjusting for anchor side (portrait & landscape fluid support)
-            const style: React.CSSProperties = {
-              position: 'absolute',
-              zIndex: isDragged ? 50 : 20,
+          {/* LEFT WING DECK (Walk/Aim Analog Stick, Left Bumpers, D-pad & System controls) */}
+          <div 
+            onPointerDown={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            onTouchStart={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            onTouchMove={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            onTouchEnd={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            className={`absolute z-4 select-none pointer-events-auto rounded-2xl p-3 sm:p-4 border transition-all ${
+              layoutUnlocked 
+                ? "border-red-500 bg-red-950/20 shadow-[0_0_20px_rgba(239,68,68,0.3)] ring-2 ring-red-500/40" 
+                : "border-white/10 bg-black/15 shadow-none text-white/90"
+            }`}
+            style={{
+              left: '1.5rem',
+              bottom: '1.5rem',
+              transform: `translate(${joystickOffset.x}px, -${joystickOffset.y}px) scale(${joystickSize})`,
+              transformOrigin: 'bottom left',
               touchAction: 'none',
-              transform: `scale(${comp.size})`,
-              transformOrigin: `${comp.anchorY} ${comp.anchorX}`,
-              opacity: InputManager.getInstance().settings?.touch?.opacity ?? 1.0,
-              transition: isDragged ? 'none' : 'transform 100ms ease, border-color 150ms ease'
-            };
-            
-            if (comp.anchorX === 'left') {
-              style.left = `${comp.x}px`;
-            } else {
-              style.right = `${comp.x}px`;
-            }
-            
-            if (comp.anchorY === 'top') {
-              style.top = `${comp.y}px`;
-            } else {
-              style.bottom = `${comp.y}px`;
-            }
-            
-            const borderClass = layoutUnlocked
-              ? isSelected
-                ? "border-orange-500 bg-orange-950/20 shadow-[0_0_15px_rgba(249,115,22,0.4)] ring-2 ring-orange-500/50"
-                : "border-red-500/60 bg-red-950/15 shadow-[0_0_8px_rgba(239,68,68,0.1)] hover:border-red-400/80 cursor-pointer"
-              : "border-white/5 bg-black/20 shadow-none text-white/90";
-              
-            return (
-              <div
-                key={comp.id}
-                id={`hud-comp-${comp.id}`}
-                style={style}
-                className={`select-none pointer-events-auto rounded-2xl p-3 border transition-all ${borderClass}`}
-                onPointerDown={(e) => { 
-                  if (!layoutUnlocked) { 
-                    e.stopPropagation(); 
-                  } else {
-                    setSelectedComponentId(comp.id);
-                  }
-                }}
+              width: '340px',
+              opacity: InputManager.getInstance().settings?.touch?.opacity ?? 1.0
+            }}
+          >
+            {layoutUnlocked && (
+              <div 
+                onMouseDown={(e) => handleDragStart("joystick", e)}
+                onTouchStart={(e) => handleDragStart("joystick", e)}
+                className="absolute -top-6 left-0 right-0 h-5 bg-red-500 text-black text-[9px] font-mono font-black flex items-center justify-between px-2 cursor-move rounded-t-md uppercase select-none animate-pulse"
               >
-                {/* Visual red dragging handle displayed in edit mode */}
-                {layoutUnlocked && (
-                  <div
-                    onMouseDown={(e) => handleHUDDragStart(comp.id, e)}
-                    onTouchStart={(e) => handleHUDDragStart(comp.id, e)}
-                    className="absolute -top-5 left-0 right-0 h-5 bg-red-500 hover:bg-red-400 text-black text-[8px] font-mono font-black flex items-center justify-between px-2 cursor-move rounded-t-lg uppercase select-none animate-pulse-slow"
+                <div className="flex items-center gap-1">
+                  <Move className="w-2.5 h-2.5" />
+                  <span>Drag Left Deck</span>
+                </div>
+                <div className="flex gap-1.5 pointer-events-auto" onMouseDown={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()}>
+                  <button 
+                    onClick={() => setJoystickSize(Math.max(0.6, joystickSize - 0.1))} 
+                    className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
                   >
-                    <div className="flex items-center gap-1">
-                      <Move className="w-2.5 h-2.5 shrink-0" />
-                      <span className="truncate max-w-[80px]">{comp.name}</span>
-                    </div>
-                    <div className="flex gap-1 items-center pointer-events-auto shrink-0" onMouseDown={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()}>
-                      <button
-                        onClick={() => updateComponentSize(comp.id, Math.max(0.5, comp.size - 0.1))}
-                        className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
-                      >
-                        -
-                      </button>
-                      <span className="text-[7.5px] font-black leading-none">{(comp.size * 100).toFixed(0)}%</span>
-                      <button
-                        onClick={() => updateComponentSize(comp.id, Math.min(1.5, comp.size + 0.1))}
-                        className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
-                      >
-                        +
-                      </button>
-                    </div>
-                  </div>
-                )}
-                
-                {/* Element content container adjusted to size bounds */}
-                <div style={{ width: `${comp.width}px`, height: `${comp.height}px` }} className="flex flex-col justify-center items-center relative">
-                  {renderComponentContent(comp.id)}
+                    -
+                  </button>
+                  <span className="text-[8px] font-bold">{(joystickSize * 100).toFixed(0)}%</span>
+                  <button 
+                    onClick={() => setJoystickSize(Math.min(1.8, joystickSize + 0.1))} 
+                    className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
+                  >
+                    +
+                  </button>
                 </div>
               </div>
-            );
-          })}
+            )}
+
+            {/* Left Deck layout: Row structure holding Analog Stick, select/start, and D-Pad */}
+            <div className="flex flex-col">
+              {/* Left Deck row 1: Left shoulder triggers (L1, L2) */}
+              <div className="flex justify-between items-center w-full mb-2.5 px-1 border-b border-white/5 pb-2">
+                <span className="text-[7px] text-zinc-500 font-bold uppercase tracking-widest leading-none">LEFT WING CONTROL SUITE</span>
+                <div className="flex space-x-1.5">
+                  {/* L2 trigger (Rail/Vortex) */}
+                  <button
+                    {...bindInputButton(() => gameManagerRef.current?.triggerL2_OffSecondary())}
+                    className="flex flex-col items-center justify-center h-8 w-11 bg-black/30 hover:bg-cyan-500/10 border border-cyan-500/30 text-cyan-350 rounded hover:text-white transition-all cursor-pointer shadow active:scale-95 leading-none"
+                    title="Vortex Rail Cannon (L2)"
+                  >
+                    <span className="text-[8px] font-black text-rose-100">L2 RAIL</span>
+                  </button>
+
+                  {/* L1 trigger (Shield/Parry) */}
+                  <button
+                    {...bindInputButton(() => gameManagerRef.current?.triggerL1_OffPrimary())}
+                    className="flex flex-col items-center justify-center h-8 w-11 bg-black/30 hover:bg-slate-500/10 border border-zinc-700 text-[#d1d1d6] rounded hover:text-white transition-all cursor-pointer shadow active:scale-95 leading-none"
+                    title="Shield Parry Defend (L1)"
+                  >
+                    <span className="text-[8px] font-black text-slate-350">L1 SHLD</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Left Deck row 2: Analog drive stick + systems + D-pad */}
+              <div className="flex items-center justify-between">
+                {/* 1. Touch Analog Control Stick */}
+                <div className="flex flex-col items-center">
+                  <span className="text-[6.5px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest">DRIVE STICK</span>
+                  <div
+                    ref={joystickBoundRef}
+                    onPointerDown={handleJoystickPointerDown}
+                    onPointerMove={handleJoystickPointerMove}
+                    onPointerUp={handleJoystickPointerUpOrCancel}
+                    onPointerCancel={handleJoystickPointerUpOrCancel}
+                    className="relative w-18 h-18 rounded-full bg-zinc-950/20 border border-zinc-800/40 flex items-center justify-center shadow-inner touch-none cursor-pointer"
+                  >
+                    {/* Subtle crosshairs / details */}
+                    <div className="absolute inset-1.5 rounded-full border border-zinc-805/10 pointer-events-none" />
+                    <div className="absolute top-1/2 left-1 right-1 h-[1px] bg-zinc-805/10 pointer-events-none" />
+                    <div className="absolute left-1/2 top-1 bottom-1 w-[1px] bg-zinc-850/10 pointer-events-none" />
+                    
+                    <div
+                      ref={joystickKnobRef}
+                      className="w-8 h-8 rounded-full bg-gradient-to-tr from-zinc-850 to-zinc-700 border border-zinc-650 shadow-[0_4px_10px_rgba(0,0,0,0.4)] flex items-center justify-center pointer-events-none transition-transform duration-75"
+                      style={{ transform: "translate(0px, 0px)" }}
+                    >
+                      <div className="w-3 h-3 rounded-full bg-zinc-950/30 border border-zinc-800/50" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Middle Row: Start & Select (Sel) rubber pill buttons */}
+                <div className="flex flex-col items-center justify-center px-1">
+                  <span className="text-[6.5px] text-zinc-500 font-bold mb-2 uppercase tracking-widest">SYSTEM</span>
+                  <div className="flex flex-col space-y-1.5 items-center bg-black/20 border border-zinc-900/40 p-1.5 rounded-lg shadow-inner">
+                    {/* SEL Button */}
+                    <button
+                      onClick={() => setShowTelemetry(!showTelemetry)}
+                      className={`w-8 h-3 rounded-full border shadow transition-all cursor-pointer active:scale-90 flex items-center justify-center ${
+                        showTelemetry
+                          ? "bg-cyan-500/20 border-cyan-400 text-cyan-400 font-bold"
+                          : "bg-zinc-800 border-zinc-700 text-zinc-400"
+                      }`}
+                      title="Toggle Telemetry Diagnostics"
+                    >
+                      <span className="text-[5px] font-black uppercase tracking-tighter">SEL</span>
+                    </button>
+                    {/* START Button */}
+                    <button
+                      {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
+                      className="w-8 h-3 rounded-full bg-red-950/25 hover:bg-red-900/20 border border-red-500/40 text-red-400 shadow active:scale-90 flex items-center justify-center transition-all cursor-pointer"
+                      title="Weapon/Matrix Stance Swap"
+                    >
+                      <span className="text-[5px] font-black uppercase tracking-tighter">START</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 3. D-Pad Group */}
+                <div className="flex flex-col items-center">
+                  <span className="text-[6.5px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest">D-PAD</span>
+                  <div className="relative w-18 h-18 bg-zinc-950/20 border border-zinc-800/40 rounded-full select-none shadow-inner flex items-center justify-center">
+                    <button
+                      {...bindInputButton(() => setShowTelemetry(!showTelemetry))}
+                      className="absolute top-1 w-5 h-4 rounded bg-black/40 border border-zinc-805/30 hover:bg-zinc-800 text-zinc-350 text-[7px] font-bold flex items-center justify-center cursor-pointer shadow-sm"
+                      title="D-Pad Up"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
+                      className="absolute left-1 w-4 h-5 rounded bg-black/40 border border-zinc-805/30 hover:bg-zinc-800 text-zinc-350 text-[7px] font-bold flex items-center justify-center cursor-pointer shadow-sm"
+                      title="D-Pad Left"
+                    >
+                      ◀
+                    </button>
+                    <button
+                      {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
+                      className="absolute right-1 w-4 h-5 rounded bg-black/40 border border-zinc-805/30 hover:bg-zinc-800 text-zinc-350 text-[7px] font-bold flex items-center justify-center cursor-pointer shadow-sm"
+                      title="D-Pad Right"
+                    >
+                      ▶
+                    </button>
+                    <button
+                      {...bindInputButton(() => { setShowCombatDebug(!showCombatDebug); })}
+                      className="absolute bottom-1 w-5 h-4 rounded bg-black/40 border border-zinc-805/30 hover:bg-zinc-800 text-zinc-350 text-[7px] font-bold flex items-center justify-center cursor-pointer shadow-sm animate-pulse-slow"
+                      title="D-Pad Down"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* RIGHT WING DECK (Aim/Fire Analog Stick, Right triggers, Face buttons A Y X B cluster) */}
+          <div 
+            onPointerDown={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            onTouchStart={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            onTouchMove={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            onTouchEnd={(e) => { if (!layoutUnlocked) { e.stopPropagation(); } }}
+            className={`absolute z-4 select-none pointer-events-auto rounded-2xl p-3 sm:p-4 border transition-all ${
+              layoutUnlocked 
+                ? "border-red-500 bg-red-950/20 shadow-[0_0_20px_rgba(239,68,68,0.3)] ring-2 ring-red-500/40" 
+                : "border-white/10 bg-black/15 shadow-none text-white/90"
+            }`}
+            style={{
+              right: '1.5rem',
+              bottom: '1.5rem',
+              transform: `translate(-${actionsOffset.x}px, -${actionsOffset.y}px) scale(${actionsSize})`,
+              transformOrigin: 'bottom right',
+              touchAction: 'none',
+              width: '340px',
+              opacity: InputManager.getInstance().settings?.touch?.opacity ?? 1.0
+            }}
+          >
+            {layoutUnlocked && (
+              <div 
+                onMouseDown={(e) => handleDragStart("actions", e)}
+                onTouchStart={(e) => handleDragStart("actions", e)}
+                className="absolute -top-6 left-0 right-0 h-5 bg-red-500 text-black text-[9px] font-mono font-black flex items-center justify-between px-2 cursor-move rounded-t-md uppercase select-none animate-pulse"
+              >
+                <div className="flex items-center gap-1">
+                  <Move className="w-2.5 h-2.5" />
+                  <span>Drag Right Deck</span>
+                </div>
+                <div className="flex gap-1.5 pointer-events-auto" onMouseDown={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()}>
+                  <button 
+                    onClick={() => setActionsSize(Math.max(0.6, actionsSize - 0.1))} 
+                    className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
+                  >
+                    -
+                  </button>
+                  <span className="text-[8px] font-bold">{(actionsSize * 100).toFixed(0)}%</span>
+                  <button 
+                    onClick={() => setActionsSize(Math.min(1.8, actionsSize + 0.1))} 
+                    className="bg-black/40 hover:bg-black/60 text-white w-3 h-3 flex items-center justify-center rounded font-bold text-[8px] cursor-pointer"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Right Deck layout: Shoulder Bumpers first, then joystick + face buttons flanked */}
+            <div className="flex flex-col">
+              {/* Right Deck row 1: Right shoulder triggers (R1, R2) */}
+              <div className="flex justify-between items-center w-full mb-2.5 px-1 border-b border-white/5 pb-2">
+                <div className="flex space-x-1.5">
+                  {/* R1 trigger (Pulse/Slash) */}
+                  <button
+                    {...bindInputButton(() => gameManagerRef.current?.triggerR1_Primary())}
+                    className="flex flex-col items-center justify-center h-8 w-11 bg-black/30 hover:bg-orange-500/10 border border-orange-550/30 text-orange-255 rounded hover:text-white transition-all cursor-pointer shadow active:scale-95 leading-none"
+                    title="Primary Laser Slash (R1)"
+                  >
+                    <span className="text-[8px] font-black text-orange-455">R1 PULSE</span>
+                  </button>
+
+                  {/* R2 trigger (Mortar/Wave) */}
+                  <button
+                    {...bindInputButton(() => gameManagerRef.current?.triggerR2_Secondary())}
+                    className="flex flex-col items-center justify-center h-8 w-11 bg-black/30 hover:bg-rose-500/10 border border-rose-550/30 text-rose-350 rounded hover:text-white transition-all cursor-pointer shadow active:scale-95 leading-none"
+                    title="Secondary Heavy Mortar (R2)"
+                  >
+                    <span className="text-[8px] font-black text-rose-455">R2 MRTR</span>
+                  </button>
+                </div>
+                <span className="text-[7px] text-zinc-500 font-bold uppercase tracking-widest leading-none text-right">RIGHT WING COMBAT DECK</span>
+              </div>
+
+              {/* Right Deck row 2: Aim stick + Info + Face Buttons diamond */}
+              <div className="flex items-center justify-between">
+                
+                {/* 1. Touch Analog Aim Stick (Twin Stick Shooting) */}
+                <div className="flex flex-col items-center">
+                  <span className="text-[6.5px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest leading-none">AIM & FIRE STICK</span>
+                  <div
+                    ref={aimBoundRef}
+                    onPointerDown={handleAimPointerDown}
+                    onPointerMove={handleAimPointerMove}
+                    onPointerUp={handleAimPointerUpOrCancel}
+                    onPointerCancel={handleAimPointerUpOrCancel}
+                    className="relative w-18 h-18 rounded-full bg-zinc-950/20 border border-zinc-800/40 flex items-center justify-center shadow-inner touch-none cursor-pointer"
+                  >
+                    {/* Subtle crosshairs / details */}
+                    <div className="absolute inset-1.5 rounded-full border border-zinc-805/10 pointer-events-none" />
+                    <div className="absolute top-1/2 left-1 right-1 h-[1px] bg-zinc-805/10 pointer-events-none" />
+                    <div className="absolute left-1/2 top-1 bottom-1 w-[1px] bg-zinc-850/10 pointer-events-none" />
+                    
+                    <div
+                      ref={aimKnobRef}
+                      className="w-8 h-8 rounded-full bg-gradient-to-tr from-zinc-850 to-zinc-700 border border-zinc-650 shadow-[0_4px_10px_rgba(0,0,0,0.4)] flex items-center justify-center pointer-events-none transition-transform duration-75"
+                      style={{ transform: "translate(0px, 0px)" }}
+                    >
+                      <div className="w-3 h-3 rounded-full bg-zinc-950/30 border border-zinc-800/50" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Central Status Detail */}
+                <div className="flex flex-col items-center justify-center text-[7px] text-zinc-600 font-mono tracking-tighter select-none leading-none scale-90">
+                  <span>TWIN-STICK</span>
+                  <span className="text-[5px] opacity-40 mt-1 uppercase text-center">MATRIX HUD v2</span>
+                </div>
+
+                {/* 2. Face Buttons Diamond Cluster (A, B, X, Y) */}
+                <div className="flex flex-col items-center">
+                  <span className="text-[6.5px] text-zinc-500 font-bold mb-1.5 uppercase tracking-widest leading-none">FACE MODULE</span>
+                  <div className="relative w-18 h-18 bg-zinc-950/25 border border-zinc-800/40 rounded-full select-none shadow-inner flex items-center justify-center">
+                    {/* Y Button: Top Center */}
+                    <button
+                      {...bindInputButton(() => gameManagerRef.current?.triggerStanceSwap())}
+                      className="absolute top-1 w-5.5 h-5.5 rounded-full bg-black/40 hover:bg-yellow-500/20 border border-yellow-500/40 hover:border-yellow-400 text-yellow-450 font-bold text-[8px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
+                      title="Stance Swap (Y)"
+                    >
+                      Y
+                    </button>
+
+                    {/* X Button: Left side */}
+                    <button
+                      {...bindInputButton(() => gameManagerRef.current?.triggerActionCancel())}
+                      className="absolute left-1 w-5.5 h-5.5 rounded-full bg-black/40 hover:bg-blue-500/20 border border-blue-500/40 hover:border-blue-400 text-blue-405 font-bold text-[8px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
+                      title="Clear / Interrupt Locks (X)"
+                    >
+                      X
+                    </button>
+
+                    {/* B Button: Right side */}
+                    <button
+                      {...bindInputButton(() => gameManagerRef.current?.triggerButtonDash())}
+                      className="absolute right-1 w-5.5 h-5.5 rounded-full bg-gradient-to-tr from-red-650 to-rose-500 border border-red-500/50 text-white font-extrabold text-[8px] flex items-center justify-center active:scale-95 transition-all cursor-pointer shadow"
+                      title="Thruster Dash Booster (B)"
+                    >
+                      B
+                    </button>
+
+                    {/* A Button: Bottom Center */}
+                    <button
+                      {...bindInputButton(() => gameManagerRef.current?.triggerContextAction())}
+                      className="absolute bottom-1 w-5.5 h-5.5 rounded-full bg-black/40 hover:bg-emerald-500/20 border border-emerald-500/40 hover:border-emerald-400 text-emerald-450 font-bold text-[8px] flex items-center justify-center active:scale-90 transition-all cursor-pointer shadow"
+                      title="Shockwave Context Trigger (A)"
+                    >
+                      A
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
         </>
       )}
         {/* Centered Desktop Resource dashboard (visible on desktop screen ranges in training/play mode) */}
@@ -2905,23 +2675,6 @@ export default function App() {
                   step="0.1"
                   value={exposure}
                   onChange={(e) => handleExposureChange(parseFloat(e.target.value))}
-                  className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
-                />
-              </div>
-
-              <div>
-                <div className="flex justify-between text-[11px] font-mono text-[#d1d1d6] mb-1">
-                  <span>SHIELD REFRACTION (IoR):</span>
-                  <span className="text-orange-400 font-bold">{shieldRefraction.toFixed(2)}</span>
-                </div>
-                <input
-                  id="shieldRefractionSlider"
-                  type="range"
-                  min="1.0"
-                  max="2.5"
-                  step="0.05"
-                  value={shieldRefraction}
-                  onChange={(e) => handleShieldRefractionChange(parseFloat(e.target.value))}
                   className="w-full accent-orange-500 bg-white/10 h-1 rounded cursor-pointer"
                 />
               </div>
