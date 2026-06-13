@@ -61,17 +61,13 @@ async function startServer() {
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
   });
-  app.use(import_express.default.static(import_path.default.join(process.cwd(), "public")));
-  const useProd = process.env.NODE_ENV === "production" && import_fs.default.existsSync(import_path.default.join(process.cwd(), "dist"));
-  if (!useProd) {
-    console.log("[Server]: Booting in DEVELOPMENT/FALLBACK mode with Vite middlewares.");
+  if (process.env.NODE_ENV !== "production") {
     const vite = await (0, import_vite.createServer)({
       server: { middlewareMode: true },
       appType: "spa"
     });
     app.use(vite.middlewares);
   } else {
-    console.log("[Server]: Serving static production files from dist.");
     const distPath = import_path.default.join(process.cwd(), "dist");
     app.use(import_express.default.static(distPath));
     app.get("*", (req, res) => {
