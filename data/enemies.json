@@ -46,5 +46,53 @@
     "color": { "r": 1.0, "g": 0.0, "b": 0.9 },
     "scale": 2.2,
     "mesh": "models/enemies/leviathan.glb"
+  },
+  {
+    "id": "orc_raider",
+    "name": "Orc Raider",
+    "description": "Medium-armored bipedal savage. Aggressive melee swings.",
+    "health": 120,
+    "speed": 3.8,
+    "damage": 25,
+    "attackRange": 3.2,
+    "color": { "r": 0.2, "g": 0.7, "b": 0.2 },
+    "scale": 1.1,
+    "mesh": "models/enemies/orc_raider.glb"
+  },
+  {
+    "id": "bog_hound",
+    "name": "Bog Hound",
+    "description": "Sprinting wild predator. Extremely agile and quick-biter.",
+    "health": 70,
+    "speed": 5.8,
+    "damage": 15,
+    "attackRange": 2.5,
+    "color": { "r": 0.6, "g": 0.4, "b": 0.2 },
+    "scale": 0.75,
+    "mesh": "models/enemies/bog_hound.glb"
+  },
+  {
+    "id": "wurmling",
+    "name": "Wurmling",
+    "description": "Toxic larval worm digging through mud. Launches poisonous spit from a distance.",
+    "health": 90,
+    "speed": 2.5,
+    "damage": 18,
+    "attackRange": 14,
+    "color": { "r": 0.4, "g": 0.8, "b": 0.1 },
+    "scale": 0.6,
+    "mesh": "models/enemies/wurmling.glb"
+  },
+  {
+    "id": "wurm_boss",
+    "name": "Gigantic Bog Wurm (Boss)",
+    "description": "A gargantuan swamp dweller shaking the earth. Severe area threat.",
+    "health": 1800,
+    "speed": 2.0,
+    "damage": 85,
+    "attackRange": 18,
+    "color": { "r": 0.7, "g": 0.1, "b": 0.6 },
+    "scale": 2.4,
+    "mesh": "models/enemies/wurm_boss.glb"
   }
 ]
