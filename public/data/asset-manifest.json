@@ -1,0 +1,10 @@
+{
+  "mechs": [
+    "./assets/models/mechs/mech_frame.glb",
+    "./assets/models/mechs/warriorTest.glb"
+  ],
+  "tiles": [
+    "./assets/tiles/bog_enviro.glb",
+    "./assets/tiles/enviroTest.glb"
+  ]
+}

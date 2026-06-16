@@ -82,6 +82,7 @@ export class EnvironmentManager {
     this.initLighting();
     this.buildGridArena();
     this.buildProceduralCyberProps();
+    this.setupFallbackPrimitives();
   }
 
   private initLighting(): void {
@@ -496,6 +497,7 @@ export class EnvironmentManager {
    */
   public async loadGLBFile(file: File, loadPosition: Vector3, type: "character" | "environment" | "prop" = "environment"): Promise<void> {
     const url = URL.createObjectURL(file);
+    const initialMeshCount = this.scene.meshes.length;
     try {
       const result = await SceneLoader.ImportMeshAsync("", "", url, this.scene, undefined, ".glb");
       
@@ -694,6 +696,14 @@ export class EnvironmentManager {
       console.log(`GLB Asset Library parsed successfully: Discovered ${this.libraryItems.length} components.`);
     } catch (e: any) {
       console.error("Failed to load dropped GLB. Check format.", e);
+      if (this.scene && !this.scene.isDisposed && this.scene.meshes.length > initialMeshCount) {
+        const newMeshes = this.scene.meshes.slice(initialMeshCount);
+        newMeshes.forEach(m => {
+          if (m && !m.isDisposed()) {
+            m.dispose(false, true);
+          }
+        });
+      }
       throw e;
     } finally {
       URL.revokeObjectURL(url);
@@ -704,6 +714,7 @@ export class EnvironmentManager {
    * Preload a custom environment kit from a standard relative URL path
    */
   public async preloadEnviroModelFromURL(url: string): Promise<void> {
+    const initialMeshCount = this.scene.meshes.length;
     try {
       const result = await SceneLoader.ImportMeshAsync("", "", url, this.scene, undefined, ".glb");
       
@@ -857,6 +868,14 @@ export class EnvironmentManager {
     } catch (e) {
       if (this.scene && !this.scene.isDisposed) {
         console.error("Failed to preload enviroTest.glb", e);
+        if (this.scene.meshes.length > initialMeshCount) {
+          const newMeshes = this.scene.meshes.slice(initialMeshCount);
+          newMeshes.forEach(m => {
+            if (m && !m.isDisposed()) {
+              m.dispose(false, true);
+            }
+          });
+        }
       }
     }
   }
@@ -1412,10 +1431,131 @@ export class EnvironmentManager {
 
     // Rebuild default modular blocks to fill the arena empty void
     this.buildProceduralCyberProps();
+    this.setupFallbackPrimitives();
 
     this.onAssetListChanged([]);
+  }
+
+  /**
+   * Generates elegant, stylized procedural fallback primitives when GLBs are not present
+   */
+  public setupFallbackPrimitives(): void {
+    const parentNode = new TransformNode("FallbackPrimitivesCatalog", this.scene);
+    parentNode.setEnabled(false); // keep templates inactive and invisible
+
+    // Metal Material
+    const metalMat = new StandardMaterial("fallbackMetalMat", this.scene);
+    metalMat.diffuseColor = new Color3(0.15, 0.18, 0.22);
+    metalMat.specularColor = new Color3(0.3, 0.3, 0.3);
+
+    // Energy Emissive Material
+    const energyMat = new StandardMaterial("fallbackEnergyMat", this.scene);
+    energyMat.emissiveColor = this.getThemeColor();
+    energyMat.disableLighting = true;
+
+    const itemsToCreate = [
+      { name: "enviroTest_floor_NE", type: "floor", color: new Color3(0.12, 0.13, 0.15) },
+      { name: "enviroTest_floor_NW", type: "floor", color: new Color3(0.12, 0.13, 0.15) },
+      { name: "enviroTest_floor_SE", type: "floor", color: new Color3(0.12, 0.13, 0.15) },
+      { name: "enviroTest_floor_SW", type: "floor", color: new Color3(0.12, 0.13, 0.15) },
+      { name: "enviroTest_obstacle", type: "obstacle" },
+      { name: "enviroTest_low_wall", type: "low_wall" },
+      { name: "enviroTest_mid_wall", type: "mid_wall" },
+      { name: "enviroTest_high_wall", type: "high_wall" }
+    ];
+
+    this.libraryItems = itemsToCreate.map((item, idx) => {
+      let mainNode: TransformNode;
+
+      if (item.type === "floor") {
+        const root = new TransformNode(item.name, this.scene);
+        root.parent = parentNode;
+
+        const tileMat = new StandardMaterial(`tileMat_${item.name}`, this.scene);
+        tileMat.diffuseColor = item.color || new Color3(0.1, 0.1, 0.1);
+
+        const plane = MeshBuilder.CreateBox("plane", { width: 4.0, height: 0.1, depth: 4.0 }, this.scene);
+        plane.material = tileMat;
+        plane.parent = root;
+        plane.receiveShadows = true;
+
+        const line = MeshBuilder.CreateBox("border_line", { width: 3.8, height: 0.12, depth: 0.1 }, this.scene);
+        line.position.set(0, 0.01, 1.9);
+        line.material = energyMat;
+        line.parent = root;
+
+        mainNode = root;
+      } else if (item.type === "obstacle") {
+        const root = new TransformNode(item.name, this.scene);
+        root.parent = parentNode;
+
+        const base = MeshBuilder.CreateCylinder("base", { diameter: 2.2, height: 1.5, tessellation: 6 }, this.scene);
+        base.position.y = 0.75;
+        base.material = metalMat;
+        base.parent = root;
+
+        const core = MeshBuilder.CreateCylinder("core", { diameter: 2.3, height: 0.3, tessellation: 6 }, this.scene);
+        core.position.y = 0.8;
+        core.material = energyMat;
+        core.parent = root;
+
+        mainNode = root;
+      } else if (item.type === "low_wall") {
+        const root = new TransformNode(item.name, this.scene);
+        root.parent = parentNode;
+
+        const barrierBox = MeshBuilder.CreateBox("barrier", { width: 4.0, height: 1.2, depth: 0.8 }, this.scene);
+        barrierBox.position.y = 0.6;
+        barrierBox.material = metalMat;
+        barrierBox.parent = root;
+
+        const glowBar = MeshBuilder.CreateBox("glow", { width: 3.8, height: 0.15, depth: 0.9 }, this.scene);
+        glowBar.position.y = 0.6;
+        glowBar.material = energyMat;
+        glowBar.parent = root;
+
+        mainNode = root;
+      } else if (item.type === "mid_wall") {
+        const root = new TransformNode(item.name, this.scene);
+        root.parent = parentNode;
+
+        const wallBox = MeshBuilder.CreateBox("wall", { width: 4.0, height: 2.2, depth: 0.8 }, this.scene);
+        wallBox.position.y = 1.1;
+        wallBox.material = metalMat;
+        wallBox.parent = root;
+
+        const glowBar = MeshBuilder.CreateBox("glow", { width: 3.8, height: 0.2, depth: 0.9 }, this.scene);
+        glowBar.position.y = 1.1;
+        glowBar.material = energyMat;
+        glowBar.parent = root;
+
+        mainNode = root;
+      } else {
+        const root = new TransformNode(item.name, this.scene);
+        root.parent = parentNode;
+
+        const wallBox = MeshBuilder.CreateBox("wall", { width: 4.0, height: 3.5, depth: 0.8 }, this.scene);
+        wallBox.position.y = 1.75;
+        wallBox.material = metalMat;
+        wallBox.parent = root;
+
+        const glowBar = MeshBuilder.CreateBox("glow", { width: 3.8, height: 0.25, depth: 0.9 }, this.scene);
+        glowBar.position.y = 1.75;
+        glowBar.material = energyMat;
+        glowBar.parent = root;
+
+        mainNode = root;
+      }
+
+      return {
+        id: `lib_fallback_${item.name}_${idx}`,
+        name: item.name,
+        originalNode: mainNode
+      };
+    });
+
     if (this.onLibraryItemsChanged) {
-      this.onLibraryItemsChanged([]);
+      this.onLibraryItemsChanged(this.libraryItems.map(item => ({ id: item.id, name: item.name })));
     }
   }
 

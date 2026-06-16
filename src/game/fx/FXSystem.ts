@@ -455,7 +455,7 @@ export class FXSystem {
    */
   public async loadEffectDefinitions(): Promise<void> {
     try {
-      const response = await fetch("/data/effects.json");
+      const response = await fetch("data/effects.json");
       if (response.ok) {
         const list: CustomEffectData[] = await response.json();
         list.forEach(item => {

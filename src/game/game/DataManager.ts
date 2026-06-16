@@ -109,11 +109,11 @@ export class DataManager {
     try {
       console.log("[DataManager]: Loading game configurations asynchronously...");
       const [weaponsRes, abilitiesRes, enemiesRes, statusEffectsRes, mapsRes] = await Promise.all([
-        fetch("/data/weapons.json").then((r) => r.json()),
-        fetch("/data/abilities.json").then((r) => r.json()),
-        fetch("/data/enemies.json").then((r) => r.json()),
-        fetch("/data/statusEffects.json").then((r) => r.json()),
-        fetch("/data/maps.json").then((r) => r.json()),
+        fetch("data/weapons.json").then((r) => r.json()),
+        fetch("data/abilities.json").then((r) => r.json()),
+        fetch("data/enemies.json").then((r) => r.json()),
+        fetch("data/statusEffects.json").then((r) => r.json()),
+        fetch("data/maps.json").then((r) => r.json()),
       ]);
 
       this.weapons = weaponsRes;

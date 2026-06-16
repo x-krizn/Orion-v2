@@ -27,6 +27,8 @@ import { EnvironmentManager } from "../rendering/EnvironmentManager";
 import { CharacterController } from "../movement/CharacterController";
 import { FXSystem } from "../fx/FXSystem";
 import { DataManager, WeaponData, AbilityData, EnemyData, StatusEffectData, MapData } from "./DataManager";
+import { TargetingSystem, TargetLockInfo } from "../combat/TargetingSystem";
+import { CombatBridge } from "../combat/CombatBridge";
 
 export class GameManager {
   private engine!: Engine;
@@ -102,25 +104,29 @@ export class GameManager {
     lastAttackTime?: number;
   }[] = [];
 
-  // Target Lock system structures
-  public lockRange = COMBAT_TUNABLES.defaultLockRange;
-  public lockSpeed = COMBAT_TUNABLES.defaultLockSpeed;
-  public lockCount = COMBAT_TUNABLES.defaultLockCount;
-  public lockRetention = true; // Lock retention metastat (locks do not break on turning away or distance)
+  // Target Lock system structures mapped to TargetingSystem
+  public targetingSystem: TargetingSystem = new TargetingSystem();
+  public combatBridge: CombatBridge = new CombatBridge();
+
+  public get lockRange(): number { return this.targetingSystem.lockRange; }
+  public set lockRange(val: number) { this.targetingSystem.lockRange = val; }
+
+  public get lockSpeed(): number { return this.targetingSystem.lockSpeed; }
+  public set lockSpeed(val: number) { this.targetingSystem.lockSpeed = val; }
+
+  public get lockCount(): number { return this.targetingSystem.lockCount; }
+  public set lockCount(val: number) { this.targetingSystem.lockCount = val; }
+
+  public get lockRetention(): boolean { return this.targetingSystem.lockRetention; }
+  public set lockRetention(val: boolean) { this.targetingSystem.lockRetention = val; }
+
+  public get autoLockEnabled(): boolean { return this.targetingSystem.autoLockEnabled; }
+  public set autoLockEnabled(val: boolean) { this.targetingSystem.autoLockEnabled = val; }
+
+  public get lockedTargets(): TargetLockInfo[] { return this.targetingSystem.getLockedTargets(); }
+  public set lockedTargets(val: TargetLockInfo[]) { this.targetingSystem.setLockedTargets(val); }
+
   public persistentAimDirection: Vector3 | null = null;
-  public lockedTargets: {
-    enemy: {
-      node: TransformNode;
-      data: EnemyData;
-      health: number;
-      maxHealth: number;
-      combatState: CombatEntityState;
-      lastAttackTime?: number;
-    };
-    progress: number; // 0 to 1
-    losLostTime?: number; // track Line of Sight loss retention
-  }[] = [];
-  public autoLockEnabled = true;
 
   // Callbacks
   private onAssetListChanged: (assets: ModelAssetInfo[]) => void = () => {};
@@ -243,12 +249,7 @@ export class GameManager {
 
     // Bind Weapons/Dash events
     this.input.onDashPressed = () => {
-      const moveDir = InputManager.getInstance().getMoveDirection();
-      const didDash = this.player.executeDash(moveDir);
-      if (didDash) {
-        this.cameraSystem.triggerShake(0.85);
-        this.fx.spawnExplosion(this.player.getPosition().add(new Vector3(0, 0.25, 0)), 8, 0.4);
-      }
+      this.combatBridge.requestAction("Dash", this);
     };
 
     this.input.onFirePressed = () => {
@@ -256,19 +257,19 @@ export class GameManager {
         // Placement click handles spawning inside onPointerDown
         return;
       }
-      this.triggerR1_Primary();
+      this.combatBridge.requestAction("Main1", this);
     };
 
     this.input.onAbilityPressed = (index) => {
       if (index === 1) {
         // Q / 1: Off-hand Primary L1 action
-        this.triggerL1_OffPrimary();
+        this.combatBridge.requestAction("Off1", this);
       } else if (index === 2) {
         // E / 2: Off-hand Secondary L2 action
-        this.triggerL2_OffSecondary();
+        this.combatBridge.requestAction("Off2", this);
       } else {
         // F: Main-hand Secondary R2 action
-        this.triggerR2_Secondary();
+        this.combatBridge.requestAction("Main2", this);
       }
     };
 
@@ -767,6 +768,14 @@ export class GameManager {
    * Safe asynchronous upload of GLB custom assets to Express backend workspace so that they are permanent
    */
   private async uploadAssetToServer(file: File): Promise<void> {
+    const isStaticDeploy = window.location.hostname.includes("github.io") || 
+                           window.location.hostname.includes("web.app") || 
+                           window.location.hostname.includes("firebaseapp.com") ||
+                           window.location.protocol === "file:";
+    if (isStaticDeploy) {
+      console.log(`[Asset Sync]: Static host detected. Skipping persistent server upload for "${file.name}".`);
+      return;
+    }
     try {
       console.log(`[Asset Sync]: Syncing custom model "${file.name}" to workspace disk storage helper...`);
       const response = await fetch("/api/upload-asset", {
@@ -842,8 +851,9 @@ export class GameManager {
    * Automatically preload user uploaded custom models if they exist in the workspace assets paths
    */
   public async preloadDefaultAssets(): Promise<void> {
-    if (this.isDisposed || (this.scene && this.scene.isDisposed)) return    // 1. Try preloading the player character model
-    const warriorPaths = [
+    if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
+
+    let warriorPaths = [
       "./assets/models/mechs/mech_frame.glb",
       "/assets/models/mechs/mech_frame.glb",
       "./assets/models/mechs/warriorTest.glb",
@@ -851,9 +861,34 @@ export class GameManager {
       "https://raw.githubusercontent.com/x-krizn/Orion-v2/main/public/assets/models/mechs/warriorTest.glb"
     ];
     
+    let enviroPaths = [
+      "./assets/tiles/bog_enviro.glb",
+      "/assets/tiles/bog_enviro.glb",
+      "./assets/tiles/enviroTest.glb",
+      "/assets/tiles/enviroTest.glb",
+      "https://raw.githubusercontent.com/x-krizn/Orion-v2/main/public/assets/tiles/enviroTest.glb"
+    ];
+
+    try {
+      const manifestRes = await fetch("data/asset-manifest.json");
+      if (manifestRes.ok) {
+        const manifest = await manifestRes.json();
+        if (manifest.mechs && Array.isArray(manifest.mechs)) {
+          warriorPaths = [...new Set([...manifest.mechs, ...warriorPaths])];
+        }
+        if (manifest.tiles && Array.isArray(manifest.tiles)) {
+          enviroPaths = [...new Set([...manifest.tiles, ...enviroPaths])];
+        }
+        console.log("[Preloader]: Loaded asset manifest successfully:", manifest);
+      }
+    } catch (e) {
+      console.warn("[Preloader]: Optional asset manifest not loaded, using fallback paths.", e);
+    }
+    
     let loadedWarrior = false;
     for (const path of warriorPaths) {
       if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
+      const preImportMeshCount = this.scene.meshes.length;
       try {
         const filename = path.substring(path.lastIndexOf("/") + 1);
         console.log(`[Preloader]: Verifying custom mech ${filename} at ${path}...`);
@@ -885,6 +920,14 @@ export class GameManager {
       } catch (e) {
         if (!this.isDisposed && this.scene && !this.scene.isDisposed) {
           console.warn(`[Preloader]: Path ${path} unsuccessful:`, e);
+          if (this.scene.meshes.length > preImportMeshCount) {
+            const newMeshes = this.scene.meshes.slice(preImportMeshCount);
+            newMeshes.forEach(m => {
+              if (m && !m.isDisposed()) {
+                m.dispose(false, true);
+              }
+            });
+          }
         }
       }
     }
@@ -892,18 +935,10 @@ export class GameManager {
       console.log("[Preloader]: Custom mech model is not present on workspace or could not load, using procedural model.");
     }
 
-    // 2. Try preloading the arena environment model
-    const enviroPaths = [
-      "./assets/tiles/bog_enviro.glb",
-      "/assets/tiles/bog_enviro.glb",
-      "./assets/tiles/enviroTest.glb",
-      "/assets/tiles/enviroTest.glb",
-      "https://raw.githubusercontent.com/x-krizn/Orion-v2/main/public/assets/tiles/enviroTest.glb"
-    ];
-    
     let loadedEnviro = false;
     for (const path of enviroPaths) {
       if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
+      const preImportMeshCount = this.scene.meshes.length;
       try {
         const filename = path.substring(path.lastIndexOf("/") + 1);
         console.log(`[Preloader]: Verifying custom environment ${filename} at ${path}...`);
@@ -913,7 +948,7 @@ export class GameManager {
           console.log(`[Preloader]: Path ${path} does not contain a valid GLB asset. Skipping...`);
           continue;
         }
-
+ 
         console.log(`[Preloader]: Path verified! Attempting to load user custom environment via ${path}...`);
         await this.environment.preloadEnviroModelFromURL(path);
         if (this.isDisposed || (this.scene && this.scene.isDisposed)) return;
@@ -923,6 +958,14 @@ export class GameManager {
       } catch (e) {
         if (!this.isDisposed && this.scene && !this.scene.isDisposed) {
           console.warn(`[Preloader]: Path ${path} unsuccessful:`, e);
+          if (this.scene.meshes.length > preImportMeshCount) {
+            const newMeshes = this.scene.meshes.slice(preImportMeshCount);
+            newMeshes.forEach(m => {
+              if (m && !m.isDisposed()) {
+                m.dispose(false, true);
+              }
+            });
+          }
         }
       }
     }
@@ -949,6 +992,12 @@ export class GameManager {
 
     const centralInput = InputManager.getInstance();
 
+    // Sync button releases with CombatBridge
+    if (!centralInput.getAction("Main1").held) this.combatBridge.releaseHold("Main1");
+    if (!centralInput.getAction("Main2").held) this.combatBridge.releaseHold("Main2");
+    if (!centralInput.getAction("Off1").held) this.combatBridge.releaseHold("Off1");
+    if (!centralInput.getAction("Off2").held) this.combatBridge.releaseHold("Off2");
+
     // 2. Map actions to Legacy triggers
     // Tab Tap/Hold or R3 Tap/Hold -> Target Lock and Cycle
     if (centralInput.getAction("LockTarget").tap) {
@@ -959,7 +1008,7 @@ export class GameManager {
 
     // Cancel Tap/Hold -> Cancel Action / Lock Clear
     if (centralInput.getAction("Cancel").tap || centralInput.getAction("Cancel").hold) {
-      this.triggerActionCancel();
+      this.combatBridge.requestAction("Cancel", this);
     }
 
     // WeaponStance Tap/Hold -> Change sockets / stance swap
@@ -974,111 +1023,13 @@ export class GameManager {
 
     const playerInputState = this.input.getInputState();
 
-    // 1. Line of Sight & Range checks on locked targets
     const playerPos = this.player.getPosition();
     const obstacles = this.environment.getObstacles();
 
-    this.lockedTargets = this.lockedTargets.filter(lt => {
-      // Check if enemy still exists in spawnedEnemies
-      const exists = this.spawnedEnemies.some(e => e === lt.enemy);
-      if (!exists) return false;
+    // 1. Update targeting system
+    this.targetingSystem.update(deltaTimeSeconds, playerPos, this.spawnedEnemies, obstacles);
 
-      // Check distance is within lockRange (only if lock retention is disabled)
-      const targetPos = lt.enemy.node.position;
-      if (!this.lockRetention) {
-        const dist = Vector3.Distance(playerPos, targetPos);
-        if (dist > this.lockRange) {
-          console.log(`[Target Lock]: Locked target ${lt.enemy.data.name} exceeded maximum range ${this.lockRange}m`);
-          return false;
-        }
-      }
-
-      // Check Line of Sight (LoS)
-      let hasLoS = true;
-      const rayDir = targetPos.subtract(playerPos);
-      const totalDist = rayDir.length();
-      rayDir.normalize();
-
-      for (const obstacle of obstacles) {
-        const obsCenter = obstacle.position;
-        const v = obsCenter.subtract(playerPos);
-        const projection = Vector3.Dot(v, rayDir);
-        
-        if (projection > 1.0 && projection < totalDist - 1.0) {
-          const closestSegmentPt = playerPos.add(rayDir.scale(projection));
-          const radialDist = Vector3.Distance(closestSegmentPt, obsCenter);
-          const obstacleRadius = 2.2; // default cyber column radius is standard
-          if (radialDist < obstacleRadius) {
-            hasLoS = false;
-            break;
-          }
-        }
-      }
-
-      if (!hasLoS) {
-        if (lt.losLostTime === undefined) {
-          lt.losLostTime = 0;
-        }
-        lt.losLostTime += deltaTimeSeconds;
-        if (lt.losLostTime > COMBAT_TUNABLES.defaultLockRetentionSecs) {
-          console.log(`[Target Lock]: Target ${lt.enemy.data.name} lock broken due to loss of line-of-sight beyond retention window!`);
-          return false;
-        }
-      } else {
-        lt.losLostTime = 0;
-      }
-
-      // Charge up lock acquisition progress (Lock Speed stat!)
-      if (lt.progress < 1.0) {
-        lt.progress = Math.min(1.0, lt.progress + deltaTimeSeconds * this.lockSpeed);
-      }
-
-      return true;
-    });
-
-    // 2. Auto-lock closest valid target if we have 0 locks and autoLock is active
-    if (this.autoLockEnabled && this.lockedTargets.length === 0 && this.spawnedEnemies.length > 0) {
-      let closestEnemy: any = null;
-      let closestDist = this.lockRange;
-
-      this.spawnedEnemies.forEach(enemy => {
-        let hasLoS = true;
-        const targetPos = enemy.node.position;
-        const rayDir = targetPos.subtract(playerPos);
-        const dist = rayDir.length();
-        rayDir.normalize();
-
-        if (dist < closestDist) {
-          for (const obstacle of obstacles) {
-            const obsCenter = obstacle.position;
-            const v = obsCenter.subtract(playerPos);
-            const projection = Vector3.Dot(v, rayDir);
-            if (projection > 1.0 && projection < dist - 1.0) {
-              const closestSegmentPt = playerPos.add(rayDir.scale(projection));
-              const radialDist = Vector3.Distance(closestSegmentPt, obsCenter);
-              if (radialDist < 2.2) {
-                hasLoS = false;
-                break;
-              }
-            }
-          }
-          if (hasLoS) {
-            closestDist = dist;
-            closestEnemy = enemy;
-          }
-        }
-      });
-
-      if (closestEnemy) {
-        this.lockedTargets.push({
-          enemy: closestEnemy,
-          progress: 1.0,
-          losLostTime: 0
-        });
-      }
-    }
-
-    // 3. Set independent aiming position based on locked target, gamepad aim direction, or cursor/persistent touch tap
+    // 2. Set independent aiming position based on locked target, gamepad aim direction, or cursor/persistent touch tap
     if (this.lockedTargets.length > 0) {
       const enemy = this.lockedTargets[0].enemy;
       const enemyScale = enemy.data?.scale || 1.0;
@@ -1095,7 +1046,7 @@ export class GameManager {
       this.player.setAimPoint(pointerPt);
     }
 
-    // 3.5 Synchronize Lock States into Combat State Machine
+    // 3. Synchronize Lock States into Combat State Machine
     if (this.lockedTargets.length > 0) {
       const lt = this.lockedTargets[0];
       if (lt.losLostTime && lt.losLostTime > 0) {
@@ -1243,67 +1194,20 @@ export class GameManager {
 
     if (tap) {
       if (this.lockedTargets.length > 0) {
-        this.lockedTargets = [];
+        this.targetingSystem.clearTargets();
         console.log("[Target Lock]: Cleared target locks via action tap.");
       } else {
         const playerPos = this.player.getPosition();
-        let closestEnemy: any = null;
-        let minDist = this.lockRange;
-
-        for (const enemy of this.spawnedEnemies) {
-          const dist = Vector3.Distance(playerPos, enemy.node.position);
-          if (dist < minDist) {
-            minDist = dist;
-            closestEnemy = enemy;
-          }
-        }
-
-        if (closestEnemy) {
-          this.toggleTargetLock(closestEnemy);
-        }
+        this.targetingSystem.acquireNearestValidTarget(playerPos, this.spawnedEnemies, this.environment.getObstacles(), true);
       }
     } else if (hold) {
-      if (this.spawnedEnemies.length <= 1) return;
-
-      let nextIndex = 0;
-      if (this.lockedTargets.length > 0) {
-        const currentlyLocked = this.lockedTargets[0].enemy;
-        const currentIdx = this.spawnedEnemies.indexOf(currentlyLocked);
-        nextIndex = (currentIdx + 1) % this.spawnedEnemies.length;
-      }
-
-      const enemyToLock = this.spawnedEnemies[nextIndex];
-      this.lockedTargets = [];
-      this.toggleTargetLock(enemyToLock);
-      console.log(`[Target Cycle]: Cycled target via hold towards ${enemyToLock.data.name}`);
+      const playerPos = this.player.getPosition();
+      this.targetingSystem.cycleTarget(playerPos, this.spawnedEnemies);
     }
   }
 
   public toggleTargetLock(enemy: any): void {
-    const activeLockIdx = this.lockedTargets.findIndex(lt => lt.enemy === enemy);
-    if (activeLockIdx >= 0) {
-      this.lockedTargets.splice(activeLockIdx, 1);
-      console.log(`[Target Lock]: Broke lock on enemy ${enemy.data.name}`);
-      return;
-    }
-    
-    // Check lock distance
-    const dist = Vector3.Distance(this.player.getPosition(), enemy.node.position);
-    if (dist > this.lockRange) {
-      console.log(`[Target Lock]: Cannot lock ${enemy.data.name}, out of range (${dist.toFixed(1)}m > ${this.lockRange}m)`);
-      return;
-    }
-    
-    // Respect Lock Count stat
-    if (this.lockedTargets.length >= this.lockCount) {
-      this.lockedTargets.shift();
-    }
-    
-    this.lockedTargets.push({
-      enemy: enemy,
-      progress: 0.0 // starts acquiring at lockSpeed rate
-    });
-    console.log(`[Target Lock]: Acquiring lock on enemy ${enemy.data.name}`);
+    this.targetingSystem.toggleTargetLock(enemy, this.player.getPosition());
   }
 
   public handleSuccessfulHit(enemy: any): void {

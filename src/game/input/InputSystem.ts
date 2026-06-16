@@ -559,17 +559,41 @@ export class InputManager {
       const stored = localStorage.getItem("orion_control_settings_v1");
       if (stored) {
         const parsed = JSON.parse(stored);
-        // deep merge default layout with stored
-        this.settings = {
-          global: { ...DEFAULT_SETTINGS.global, ...parsed.global },
-          pc: {
-            ...DEFAULT_SETTINGS.pc,
-            ...parsed.pc,
-            keybinds: { ...DEFAULT_SETTINGS.pc.keybinds, ...(parsed.pc?.keybinds || {}) }
-          },
-          gamepad: { ...DEFAULT_SETTINGS.gamepad, ...parsed.gamepad },
-          touch: { ...DEFAULT_SETTINGS.touch, ...parsed.touch }
+        
+        // Deep merge default layout with stored
+        const global = { ...DEFAULT_SETTINGS.global, ...parsed.global };
+        const pc = {
+          ...DEFAULT_SETTINGS.pc,
+          ...parsed.pc,
+          keybinds: { ...DEFAULT_SETTINGS.pc.keybinds, ...(parsed.pc?.keybinds || {}) }
         };
+        const gamepad = { ...DEFAULT_SETTINGS.gamepad, ...parsed.gamepad };
+        const touch = { ...DEFAULT_SETTINGS.touch, ...parsed.touch };
+
+        // Ensure types are absolutely correct
+        if (typeof global.tapHoldThreshold !== "number" || isNaN(global.tapHoldThreshold) || global.tapHoldThreshold < 50 || global.tapHoldThreshold > 2000) {
+          global.tapHoldThreshold = 300;
+        }
+        if (typeof global.aimSensitivity !== "number" || isNaN(global.aimSensitivity) || global.aimSensitivity <= 0) {
+          global.aimSensitivity = 1.0;
+        }
+        if (typeof pc.mouseSensitivity !== "number" || isNaN(pc.mouseSensitivity) || pc.mouseSensitivity <= 0) {
+          pc.mouseSensitivity = 1.0;
+        }
+        if (typeof gamepad.leftDeadzone !== "number" || isNaN(gamepad.leftDeadzone) || gamepad.leftDeadzone < 0 || gamepad.leftDeadzone > 0.9) {
+          gamepad.leftDeadzone = 0.15;
+        }
+        if (typeof gamepad.rightDeadzone !== "number" || isNaN(gamepad.rightDeadzone) || gamepad.rightDeadzone < 0 || gamepad.rightDeadzone > 0.9) {
+          gamepad.rightDeadzone = 0.15;
+        }
+        if (typeof gamepad.triggerThreshold !== "number" || isNaN(gamepad.triggerThreshold) || gamepad.triggerThreshold < 0 || gamepad.triggerThreshold > 0.9) {
+          gamepad.triggerThreshold = 0.15;
+        }
+        if (typeof touch.opacity !== "number" || isNaN(touch.opacity) || touch.opacity < 0.0 || touch.opacity > 1.0) {
+          touch.opacity = 0.94;
+        }
+
+        this.settings = { global, pc, gamepad, touch };
         this.activeDevice = this.settings.global.activeDevice || "PC";
       } else {
         this.settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
