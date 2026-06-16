@@ -366,6 +366,39 @@ export default function App() {
           updateDebugAttr("dbgGuard", cs.isGuardBroken ? "text-rose-500 font-bold animate-pulse" : "text-yellow-300 font-black");
         }
         
+        // Update Encounter HUD elements dynamically from EncounterSystem
+        if (gm.encounterSystem) {
+          const step = gm.encounterSystem.getStep();
+          const objText = gm.encounterSystem.getObjectiveText();
+          const dialogueState = gm.encounterSystem.getDialogue();
+
+          const stepEl = document.getElementById("encounterStepText");
+          if (stepEl) stepEl.innerText = `STEP: ${step}`;
+
+          const regionEl = document.getElementById("encounterRegionText");
+          if (regionEl && gm.worldNodeSystem) {
+            const activeNode = gm.worldNodeSystem.getActiveNode();
+            regionEl.innerText = activeNode ? activeNode.name.toUpperCase() : "WILDERNESS VOID";
+          }
+
+          const objEl = document.getElementById("encounterObjectiveText");
+          if (objEl) objEl.innerText = objText;
+
+          const dialogueContainer = document.getElementById("encounterDialogueContainer");
+          if (dialogueContainer) {
+            if (dialogueState.text) {
+              dialogueContainer.style.display = "flex";
+              const speakerEl = document.getElementById("encounterDialogueSpeaker");
+              if (speakerEl) speakerEl.innerText = dialogueState.speaker;
+              
+              const bodyEl = document.getElementById("encounterDialogueText");
+              if (bodyEl) bodyEl.innerText = dialogueState.text;
+            } else {
+              dialogueContainer.style.display = "none";
+            }
+          }
+        }
+        
         // B. Mobile floating HUD projection near player
         const mobileHud = document.getElementById("mobilePlayerFloatingHUD");
         if (mobileHud) {
@@ -1008,6 +1041,75 @@ export default function App() {
           </div>
         </div>
       </header>
+      {/* ---------------------------------------------------- */}
+      {/* ENCOUNTER PROGRESSION HUD & NPC DIALOGUE CHANNELS */}
+      {/* ---------------------------------------------------- */}
+      {gameState === "training" && (
+        <>
+          {/* Top-Right Mission Tracker Glass Panel */}
+          <div className="absolute top-4 right-4 z-4 select-none pointer-events-none flex flex-col items-end gap-2">
+            <div className="cyber-panel px-3 py-2 rounded-md border-white/10 bg-[#0e0e12]/88 backdrop-blur-md shadow-lg flex flex-col items-start w-72 md:w-80">
+              <div className="flex items-center justify-between w-full border-b border-white/10 pb-1 mb-1.5">
+                <span id="encounterStepText" className="text-[8px] font-mono font-bold text-amber-500 uppercase tracking-widest">
+                  STEP: WAKE
+                </span>
+                <span id="encounterRegionText" className="text-[7px] font-mono text-slate-500 tracking-wider">BOG DEMO SECTOR</span>
+              </div>
+              
+              <div className="w-full">
+                <h4 className="text-[10px] font-sans font-bold text-slate-200 tracking-wide uppercase mb-1">
+                  Active Mission Objective
+                </h4>
+                <p id="encounterObjectiveText" className="text-[10.5px] font-sans text-emerald-400 font-medium leading-normal animate-pulse">
+                  Calibrate flight systems. Move across sector.
+                </p>
+              </div>
+
+              {/* Debug / Progression Control Suite */}
+              <div className="flex gap-2 mt-3 w-full border-t border-white/5 pt-2">
+                <button
+                  onClick={() => {
+                    const gm = gameManagerRef.current;
+                    if (gm && gm.encounterSystem) {
+                      gm.encounterSystem.triggerDeathRetry(gm);
+                    }
+                  }}
+                  className="flex-1 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-350 hover:text-white text-[7.5px] font-mono uppercase tracking-wider transition-all cursor-pointer text-center"
+                >
+                  Restart Step
+                </button>
+                <button
+                  onClick={() => {
+                    const gm = gameManagerRef.current;
+                    if (gm && gm.encounterSystem) {
+                      gm.encounterSystem.resetToStart(gm);
+                    }
+                  }}
+                  className="flex-1 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 hover:text-white text-[7.5px] font-mono uppercase tracking-wider transition-all cursor-pointer text-center"
+                >
+                  Clear Progress
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom Dialogues Overlay Bubble */}
+          <div
+            id="encounterDialogueContainer"
+            style={{ display: "none" }}
+            className="absolute bottom-28 left-1/2 -translate-x-1/2 z-4 pointer-events-auto flex flex-col items-center justify-center w-[90%] max-w-lg transition-all"
+          >
+            <div className="cyber-panel px-4 py-3 rounded-lg border-orange-500/30 bg-[#070709]/95 backdrop-blur-md shadow-2xl flex flex-col gap-1.5 w-full">
+              <span id="encounterDialogueSpeaker" className="text-[9px] font-mono font-black text-amber-500 uppercase tracking-widest border-b border-amber-500/10 pb-0.5">
+                Unknown Transceiver
+              </span>
+              <p id="encounterDialogueText" className="text-[11.5px] font-sans text-slate-200 font-medium text-center leading-relaxed italic pr-1">
+                -- Recieving neural network carrier wave... --
+              </p>
+            </div>
+          </div>
+        </>
+      )}
       {/* ---------------------------------------------------- */}
       {/* COMBAT FLIGHT DECKS (Two Corner-Anchored Flight Suites) */}
       {/* ---------------------------------------------------- */}

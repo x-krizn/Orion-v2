@@ -29,10 +29,13 @@ import { FXSystem } from "../fx/FXSystem";
 import { DataManager, WeaponData, AbilityData, EnemyData, StatusEffectData, MapData } from "./DataManager";
 import { TargetingSystem, TargetLockInfo } from "../combat/TargetingSystem";
 import { CombatBridge } from "../combat/CombatBridge";
+import { EnemyAISystem } from "../enemy/EnemyAI";
+import { EncounterSystem } from "../encounter/EncounterSystem";
+import { WorldNodeSystem } from "../world/WorldNodeSystem";
 
 export class GameManager {
   private engine!: Engine;
-  private scene!: Scene;
+  public scene!: Scene;
   private canvas!: HTMLCanvasElement;
   
   // Settings instance
@@ -107,6 +110,9 @@ export class GameManager {
   // Target Lock system structures mapped to TargetingSystem
   public targetingSystem: TargetingSystem = new TargetingSystem();
   public combatBridge: CombatBridge = new CombatBridge();
+  public enemyAISystem: EnemyAISystem = new EnemyAISystem();
+  public encounterSystem: EncounterSystem = new EncounterSystem();
+  public worldNodeSystem: WorldNodeSystem = new WorldNodeSystem();
 
   public get lockRange(): number { return this.targetingSystem.lockRange; }
   public set lockRange(val: number) { this.targetingSystem.lockRange = val; }
@@ -1072,48 +1078,14 @@ export class GameManager {
     // Update Particles
     this.fx.update(deltaTimeSeconds);
 
-    // Dynamic hover motion & orientation of spawned enemies facing player + chasing AI
-    this.spawnedEnemies.forEach(enemy => {
-      // Interpolate angles towards player heading
-      const dir = this.player.getPosition().subtract(enemy.node.position);
-      dir.y = 0;
-      const length = dir.length();
-      
-      if (length > 0.1) {
-        dir.normalize();
-        const targetRotY = Math.atan2(dir.x, dir.z);
-        const diffY = targetRotY - enemy.node.rotation.y;
-        const wrapped = Math.atan2(Math.sin(diffY), Math.cos(diffY));
-        enemy.node.rotation.y += wrapped * Math.min(1.0, deltaTimeSeconds * 3.5);
-      }
-      
-      // Melee and Chasing AI
-      if (length > 2.8) {
-        // Chase player
-        enemy.node.position.addInPlace(dir.scale(deltaTimeSeconds * 3.0));
-      } else {
-        // Melee attack player
-        const now = Date.now();
-        if (!enemy.lastAttackTime || now - enemy.lastAttackTime > 1800) {
-          enemy.lastAttackTime = now;
-          this.player.takeDamage(45);
-          this.cameraSystem.triggerShake(0.6);
-          this.fx.spawnExplosion(playerPos.add(new Vector3(0, 1.0, 0)), 4, 0.35);
-        }
-      }
-      
-      // Floating bounce animation loop
-      const hoverCycle = (performance.now() / 1000.0) * 3.0 + enemy.node.position.x * 2.0;
-      const yOffset = Math.sin(hoverCycle) * 0.12 * enemy.data.scale;
-      const children = enemy.node.getChildMeshes();
-      children.forEach(mesh => {
-        if (mesh.name.includes("Body")) {
-          mesh.position.y = ((1.6 * enemy.data.scale) / 2) + yOffset;
-        } else if (mesh.name.includes("Eye")) {
-          mesh.position.y = (1.2 * enemy.data.scale) + yOffset;
-        }
-      });
-    });
+    // Ticks behavior for all active enemies through modular AI system
+    this.enemyAISystem.update(deltaTimeSeconds, this);
+
+    // Ticks world node ambience, particles, zone containment checks
+    this.worldNodeSystem.update(deltaTimeSeconds, this);
+
+    // Ticks sequence progress via encounter system and spawn pipeline
+    this.encounterSystem.update(deltaTimeSeconds, this);
 
     // Reset instant triggers
     this.input.clearTriggers();
@@ -1551,6 +1523,7 @@ export class GameManager {
    */
   public dispose(): void {
     this.isDisposed = true;
+    this.worldNodeSystem.dispose();
     this.fx.clearAll();
     this.environment.clearCustomAssets();
     this.glowLayer?.dispose();
